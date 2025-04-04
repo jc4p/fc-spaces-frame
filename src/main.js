@@ -994,7 +994,31 @@ function isRoomCreator() {
 function updateSpeakingStatus() {
   const peers = hmsStore.getState(selectPeers);
   
+  // Log peer info once per interval for debugging
+  if (Math.random() < 0.05) { // Log roughly 5% of the time to avoid excessive logging
+    console.log('Peers update:', peers.map(peer => ({
+      name: peer.name,
+      audioTrack: peer.audioTrack ? 'defined' : 'undefined',
+      audioEnabled: peer.audioEnabled
+    })));
+  }
+  
   peers.forEach(peer => {
+    // For creators/streamers, skip the audio track check for the first 10 seconds after join
+    // to avoid showing errors before the tracks are fully initialized
+    const isStreamer = peer.roleName === 'fariscope-streamer';
+    const peerJoinTime = peer.joinedAt ? peer.joinedAt.getTime() : 0;
+    const currentTime = new Date().getTime();
+    const timeSinceJoin = currentTime - peerJoinTime;
+    const isRecentlyJoined = timeSinceJoin < 10000; // 10 seconds
+    
+    // Special handling for streamers who recently joined
+    if (isStreamer && isRecentlyJoined && !peer.audioTrack) {
+      // For recent streamers without audio tracks, don't show as muted yet
+      // This prevents false "muted" indicators during initialization
+      return;
+    }
+    
     // Skip peers with no audio track or muted peers
     if (!peer.audioTrack || !peer.audioEnabled) {
       speakingPeers.set(peer.id, false);
@@ -1005,24 +1029,23 @@ function updateSpeakingStatus() {
       // Get audio level for the peer
       const audioTrack = hmsStore.getState(selectAudioTrackByPeerID(peer.id));
       
-      if (audioTrack && audioTrack.id) {
-        // Get audio level - value between 0 and 1
-        const audioLevel = hmsStore.getState(selectPeerAudioByID(peer.id)) || 0;
-        
-        // Consider speaking if audio level is above threshold (0.05)
-        const isSpeaking = audioLevel > 0.05;
-        
-        // Update speaking state
-        speakingPeers.set(peer.id, isSpeaking);
-        
-        // Update DOM if needed
-        const peerAvatar = document.querySelector(`[data-peer-id="${peer.id}"] .avatar`);
-        if (peerAvatar) {
-          if (isSpeaking) {
-            peerAvatar.classList.add('speaking');
-          } else {
-            peerAvatar.classList.remove('speaking');
-          }
+      // Try to get audio level even if audioTrack isn't fully initialized
+      // The 100ms SDK sometimes has audioTrack undefined even when audio is working
+      const audioLevel = hmsStore.getState(selectPeerAudioByID(peer.id)) || 0;
+      
+      // Consider speaking if audio level is above threshold (0.05)
+      const isSpeaking = audioLevel > 0.05;
+      
+      // Update speaking state
+      speakingPeers.set(peer.id, isSpeaking);
+      
+      // Update DOM if needed
+      const peerAvatar = document.querySelector(`[data-peer-id="${peer.id}"] .avatar`);
+      if (peerAvatar) {
+        if (isSpeaking) {
+          peerAvatar.classList.add('speaking');
+        } else {
+          peerAvatar.classList.remove('speaking');
         }
       }
     } catch (e) {
@@ -1927,15 +1950,22 @@ async function directJoinRoom(event) {
       })
     });
     
-    // For streamers or creators, ensure audio permissions and unmute after a short delay
+    // For streamers or creators, ensure audio permissions and unmute after a delay
     if (isJoiningAsSpeaker || isJoiningAsCreator) {
       // Only auto-unmute creators
       const shouldAutoUnmute = isJoiningAsCreator;
       console.log('User is joining as speaker/creator, will force unmute after delay:', shouldAutoUnmute);
       
-      // Force unmute after a short delay to ensure HMS is fully initialized
+      // Longer delay for creators (5 seconds) to ensure HMS SDK has fully initialized
+      // This helps prevent premature errors about audio tracks not being ready
+      const unmutingDelay = isJoiningAsCreator ? 5000 : 2000;
+      console.log(`Setting unmuting delay to ${unmutingDelay}ms to ensure audio tracks are ready`);
+      
+      // Force unmute after a delay to ensure HMS is fully initialized
       setTimeout(async () => {
         try {
+          console.log('Starting delayed audio setup process...');
+          
           // Ensure microphone permission is granted - silently
           if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
             try {
@@ -1961,22 +1991,33 @@ async function directJoinRoom(event) {
           const forceUnmute = async () => {
             console.log('Running force unmute for creator after join');
             const localPeer = hmsStore.getState(selectLocalPeer);
+            console.log('Local peer state:', {
+              id: localPeer?.id,
+              audioTrack: localPeer?.audioTrack ? 'defined' : 'undefined',
+              roleName: localPeer?.roleName
+            });
             
             try {
               // Standard method
               await hmsActions.setLocalAudioEnabled(true);
+              console.log('Standard unmute method completed');
               
               // Track-specific method
               if (localPeer?.id) {
                 const audioTrack = hmsStore.getState(selectAudioTrackByPeerID(localPeer.id));
+                console.log('Audio track state:', audioTrack ? 'found' : 'not found', 
+                            audioTrack?.id ? 'with ID' : 'without ID');
+                            
                 if (audioTrack?.id) {
                   await hmsActions.setEnabledTrack(audioTrack.id, true);
+                  console.log('Track-specific unmute completed');
                 }
               }
               
               // Direct track access method
               if (localPeer?.audioTrack) {
                 await hmsActions.setEnabledTrack(localPeer.audioTrack, true);
+                console.log('Direct track unmute completed');
               }
               
               console.log('Force unmute completed - creator should now be audible');
@@ -1989,6 +2030,17 @@ async function directJoinRoom(event) {
               
               // Force refresh the UI
               renderPeers();
+              
+              // Add a final check after a short delay to make sure audio is enabled
+              setTimeout(async () => {
+                const isAudioEnabled = hmsStore.getState(selectIsLocalAudioEnabled);
+                console.log('Final audio state check:', isAudioEnabled ? 'UNMUTED' : 'MUTED');
+                
+                if (!isAudioEnabled) {
+                  console.log('Audio still muted after all unmute attempts, trying one more time');
+                  await hmsActions.setLocalAudioEnabled(true);
+                }
+              }, 1000);
             } catch (error) {
               console.error('Force unmute error:', error);
             }
@@ -2000,7 +2052,7 @@ async function directJoinRoom(event) {
         } catch (error) {
           console.error('Post-join unmute error:', error);
         }
-      }, 2000); // 2-second delay to ensure HMS is fully initialized
+      }, unmutingDelay); // Increased delay to ensure HMS is fully initialized
     }
     
     // Note: This debug call uses an endpoint that doesn't exist in SERVER_README.md
@@ -2710,7 +2762,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       refreshRoomsBtn.addEventListener('click', async () => {
         // Show loading state on the button
         const originalContent = refreshRoomsBtn.innerHTML;
-        refreshRoomsBtn.innerHTML = '<svg class="rotating" width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12.0002 4.75V6.25C12.0002 6.66421 11.6644 7 11.2502 7C10.836 7 10.5002 6.66421 10.5002 6.25V4.75C10.5002 4.33579 10.836 4 11.2502 4C11.6644 4 12.0002 4.33579 12.0002 4.75Z" fill="currentColor" /><path d="M11.2502 20C11.6644 20 12.0002 19.6642 12.0002 19.25V17.75C12.0002 17.3358 11.6644 17 11.2502 17C10.836 17 10.5002 17.3358 10.5002 17.75V19.25C10.5002 19.6642 10.836 20 11.2502 20Z" fill="currentColor" /><path d="M4.75 12C4.75 12.4142 4.41421 12.75 4 12.75C3.58579 12.75 3.25 12.4142 3.25 12C3.25 11.5858 3.58579 11.25 4 11.25C4.41421 11.25 4.75 11.5858 4.75 12Z" fill="currentColor" /><path d="M20 12.75C20.4142 12.75 20.75 12.4142 20.75 12C20.75 11.5858 20.4142 11.25 20 11.25C19.5858 11.25 19.25 11.5858 19.25 12C19.25 12.4142 19.5858 12.75 20 12.75Z" fill="currentColor" /><path d="M7.05023 7.05029C7.33579 6.76473 7.33579 6.30681 7.05023 6.02124C6.76466 5.73568 6.30674 5.73568 6.02118 6.02124L5.12868 6.91374C4.84312 7.19931 4.84312 7.65723 5.12868 7.94279C5.41425 8.22836 5.87216 8.22836 6.15773 7.94279L7.05023 7.05029Z" fill="currentColor" /><path d="M18.9791 17.9792C18.6935 17.6937 18.2356 17.6937 17.95 17.9792C17.6645 18.2648 17.6645 18.7227 17.95 19.0083L18.8425 19.9008C19.1281 20.1863 19.586 20.1863 19.8716 19.9008C20.1571 19.6152 20.1571 19.1573 19.8716 18.8717L18.9791 17.9792Z" fill="currentColor" /><path d="M17.9498 6.02124C17.6642 6.30681 17.6642 6.76473 17.9498 7.05029L18.8423 7.94279C19.1279 8.22836 19.5858 8.22836 19.8714 7.94279C20.1569 7.65723 20.1569 7.19931 19.8714 6.91374L18.9789 6.02124C18.6933 5.73568 18.2354 5.73568 17.9498 6.02124Z" fill="currentColor" /><path d="M6.02082 17.9792L5.12832 18.8717C4.84276 19.1573 4.84276 19.6152 5.12832 19.9008C5.41389 20.1863 5.8718 20.1863 6.15737 19.9008L7.04987 19.0083C7.33543 18.7227 7.33543 18.2648 7.04987 17.9792C6.7643 17.6937 6.30639 17.6937 6.02082 17.9792Z" fill="currentColor" /></svg>';
+        refreshRoomsBtn.innerHTML = `<svg class="rotating" width="20" height="20" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+          <path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z" 
+                fill="currentColor" />
+        </svg>`;
         refreshRoomsBtn.disabled = true;
         
         // Add rotating animation style if it doesn't exist
