@@ -561,7 +561,20 @@ function renderPeers() {
   
   if (!peers.length) return;
   
-  // Set room title based on the first streamer's name
+  // Set room title based on the room description if available
+  const localPeerRoom = localPeer?.roomId;
+  
+  // Try to get the current room details from any active room element
+  const activeRoomElement = document.querySelector('.room-item.active-room');
+  if (activeRoomElement) {
+    const roomDescription = activeRoomElement.querySelector('.room-title')?.textContent;
+    if (roomDescription) {
+      roomTitle.textContent = roomDescription;
+      return;
+    }
+  }
+  
+  // Fallback to streamer name if no room description is available
   const streamer = peers.find(peer => peer.roleName === 'fariscope-streamer');
   if (streamer) {
     let streamerId = streamer.name;
@@ -1570,7 +1583,7 @@ async function loadRooms() {
           data-creator-address="${creatorAddress}"
           data-is-creator="${isCurrentUserRoom ? 'true' : 'false'}">
           <div class="room-info">
-            <div class="room-title">Audio Room with FID: ${fid}</div>
+            <div class="room-title">${room.description || `Audio Room with FID: ${fid}`}</div>
             <div class="room-details">
               <span class="live-badge">LIVE</span>
               ${createdAt ? `<span class="created-at">${createdAt}</span>` : ''}
