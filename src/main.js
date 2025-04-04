@@ -380,6 +380,21 @@ const api = {
       }
     }
     
+    // After successfully disabling room on server, trigger a custom event
+    // This will help non-creator peers detect that the room has been ended
+    try {
+      // Broadcast a special message to other peers in the room to let them know
+      // the room has been ended by the creator
+      const roomDisabledEvent = new CustomEvent('roomDisabled', {
+        detail: { roomId, disabledBy: fid }
+      });
+      window.dispatchEvent(roomDisabledEvent);
+      
+      console.log('Room disabled event dispatched');
+    } catch (eventError) {
+      console.warn('Failed to dispatch room disabled event:', eventError);
+    }
+    
     return response.json();
   },
   
@@ -762,9 +777,10 @@ function renderSpeakersList(speakers, localPeer) {
       ? `<img src="${profile.pfpUrl}" alt="${displayName}" />`
       : speaker.name.charAt(0).toUpperCase();
     
-    // Only show mute badge if the speaker is actually muted
-    // For local user, show mute badge if they're actually muted, regardless of permissions
-    const showMuteBadge = isMuted;
+    // CHANGED: Only show mute badge for local user
+    // This prevents showing remote peers as muted when they might not actually be
+    // and avoids confusion when promoting listeners to speakers
+    const showMuteBadge = isLocal && isMuted;
     
     // Only show interaction hint for non-local peers if user is creator
     const showInteractionHint = !isLocal && userIsCreator;
@@ -826,9 +842,9 @@ function renderListenersList(listeners, localPeer, isHost) {
       ? `<img src="${profile.pfpUrl}" alt="${displayName}" />`
       : listener.name.charAt(0).toUpperCase();
     
-    // Only show mute badge if the listener is actually muted
-    // Use the accurate mute state we determined above
-    const showMuteBadge = isMuted;
+    // CHANGED: Only show mute badge for local user
+    // This prevents showing remote peers as muted when they might not actually be
+    const showMuteBadge = isLocal && isMuted;
     
     // Only show interaction hint for non-local peers if user is creator
     const showInteractionHint = !isLocal && userIsCreator;
@@ -880,6 +896,20 @@ function handlePeerClick(e) {
   
   // Show appropriate action modal based on role
   listenerActionModal.classList.remove('hide');
+  
+  // Add click-outside listener to close the modal
+  const closeModalOnOutsideClick = (event) => {
+    // Check if the click was outside the modal content
+    if (!event.target.closest('.modal-content') && event.target.classList.contains('modal')) {
+      listenerActionModal.classList.add('hide');
+      document.removeEventListener('click', closeModalOnOutsideClick);
+    }
+  };
+  
+  // Use setTimeout to avoid the current click triggering the handler
+  setTimeout(() => {
+    document.addEventListener('click', closeModalOnOutsideClick);
+  }, 10);
   
   // Update the avatar in the modal
   const listenerAvatar = document.querySelector('.listener-avatar');
@@ -1213,9 +1243,22 @@ muteAudio.onclick = async () => {
           // Update UI to at least show correct state
           const muteButton = document.getElementById('mute-aud');
           if (muteButton) {
-            const muteIcon = muteButton.querySelector('i');
-            if (muteIcon) {
-              muteIcon.className = 'fa fa-microphone-slash';
+            const micIcon = muteButton.querySelector('.mic-icon');
+            if (micIcon) {
+              // Show muted microphone icon
+              micIcon.innerHTML = `
+                <!-- Microphone body -->
+                <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" 
+                      fill="currentColor" />
+                <!-- Stand/base of microphone -->
+                <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-0.49 6-3.39 6-6.92h-2z" 
+                      fill="currentColor" />
+                <!-- Diagonal line through the mic (mute indicator) -->
+                <line x1="3" y1="3" x2="21" y2="21" 
+                      stroke="currentColor" 
+                      stroke-width="2"
+                      stroke-linecap="round" />
+              `;
             }
             const muteText = muteButton.querySelector('span');
             if (muteText) {
@@ -1226,10 +1269,41 @@ muteAudio.onclick = async () => {
       }
     }, 800);
     
-    // Update button text
+    // Update button text and icon
     const muteText = muteAudio.querySelector('span');
     if (muteText) {
       muteText.textContent = audioEnabled ? "Mute" : "Unmute";
+    }
+    
+    // Update the microphone SVG based on mute state
+    const micIcon = muteAudio.querySelector('.mic-icon');
+    if (micIcon) {
+      if (audioEnabled) {
+        // Unmuted microphone
+        micIcon.innerHTML = `
+          <!-- Microphone body -->
+          <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" 
+                fill="currentColor" />
+          <!-- Stand/base of microphone -->
+          <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-0.49 6-3.39 6-6.92h-2z" 
+                fill="currentColor" />
+        `;
+      } else {
+        // Muted microphone with diagonal line
+        micIcon.innerHTML = `
+          <!-- Microphone body -->
+          <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" 
+                fill="currentColor" />
+          <!-- Stand/base of microphone -->
+          <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-0.49 6-3.39 6-6.92h-2z" 
+                fill="currentColor" />
+          <!-- Diagonal line through the mic (mute indicator) -->
+          <line x1="3" y1="3" x2="21" y2="21" 
+                stroke="currentColor" 
+                stroke-width="2"
+                stroke-linecap="round" />
+        `;
+      }
     }
     
     // Force refresh the UI to update mute badges
@@ -1251,16 +1325,51 @@ muteAudio.onclick = async () => {
 const shareWarpcastBtn = document.getElementById("share-warpcast");
 if (shareWarpcastBtn) {
   shareWarpcastBtn.onclick = async () => {
-    const localPeer = hmsStore.getState(selectLocalPeer);
-    const roomId = localPeer?.roomId;
-    const fid = window.userFid || (localPeer?.name.includes('FID:') ? localPeer.name.split('FID:')[1] : '');
+    // Use the fixed message and URL as requested
+    const shareText = "I'm live on FC Audio Chat!";
+    const shareUrl = "https://fc-audio-chat.kasra.codes";
     
-    if (roomId) {
-      const shareUrl = `${window.location.origin}/join?roomId=${roomId}`;
-      const shareText = `Join my FC AUDIO CHAT room!${fid ? ' Hosted by FID:' + fid : ''}`;
+    // Show a small success indicator
+    const successIndicator = document.createElement('div');
+    successIndicator.className = 'share-success-indicator';
+    successIndicator.style.position = 'absolute';
+    successIndicator.style.top = '0';
+    successIndicator.style.right = '0';
+    successIndicator.style.background = 'rgba(76, 175, 80, 0.9)';
+    successIndicator.style.color = 'white';
+    successIndicator.style.padding = '4px 8px';
+    successIndicator.style.borderRadius = '4px';
+    successIndicator.style.fontSize = '12px';
+    successIndicator.style.zIndex = '999';
+    successIndicator.textContent = 'Sharing...';
+    
+    shareWarpcastBtn.style.position = 'relative';
+    shareWarpcastBtn.appendChild(successIndicator);
+    
+    // Call frameHelpers.shareToCast with the fixed message and URL
+    console.log('Sharing to Warpcast:', { shareText, shareUrl });
+    
+    try {
+      // The shareToCast function constructs the URL and opens it using the frame SDK
+      await frameHelpers.shareToCast(shareText, shareUrl);
       
-      frameHelpers.shareToCast(shareText, shareUrl);
+      // Update success indicator
+      successIndicator.textContent = 'Opening Warpcast...';
+      successIndicator.style.background = 'rgba(76, 175, 80, 0.9)';
+    } catch (error) {
+      console.error('Failed to share to Warpcast:', error);
+      
+      // Update indicator to show error
+      successIndicator.textContent = 'Failed';
+      successIndicator.style.background = 'rgba(244, 67, 54, 0.9)';
     }
+    
+    // Remove indicator after a delay
+    setTimeout(() => {
+      if (shareWarpcastBtn.contains(successIndicator)) {
+        shareWarpcastBtn.removeChild(successIndicator);
+      }
+    }, 2000);
   };
 }
 
@@ -1697,6 +1806,68 @@ function onConnection(isConnected) {
 
 // Listen to the connection state
 hmsStore.subscribe(onConnection, selectIsConnectedToRoom);
+
+// Add a listener for room state changes to detect when room is ended
+hmsStore.subscribe(async (peers) => {
+  try {
+    const isConnected = hmsStore.getState(selectIsConnectedToRoom);
+    if (!isConnected) return; // Skip if we're not connected
+    
+    const localPeer = hmsStore.getState(selectLocalPeer);
+    if (!localPeer) return; // Skip if no local peer
+    
+    // We're only interested in rooms with the local user as a non-creator
+    // Look for creator in the peers list
+    const isLocalUserCreator = isRoomCreator();
+    
+    if (isLocalUserCreator) return; // We only want to handle the non-creator case here
+    
+    // Check if there's any streamer/creator in the room
+    const streamers = peers.filter(peer => peer.roleName === 'fariscope-streamer');
+    const hasStreamers = streamers.length > 0;
+    
+    console.log('Room state check: streamers present?', hasStreamers, 'streamers count:', streamers.length);
+    
+    // If there are no streamers and we're connected, the creator likely ended the room
+    // We should leave the room too as it's non-functional
+    if (!hasStreamers && peers.length > 0) {
+      console.log('No streamers detected in room - room may have been ended by creator');
+      
+      // Brief timeout to prevent false triggers during role changes
+      setTimeout(async () => {
+        // Double-check that we're still connected and still no streamers
+        const stillConnected = hmsStore.getState(selectIsConnectedToRoom);
+        const currentPeers = hmsStore.getState(selectPeers);
+        const stillNoStreamers = !currentPeers.some(peer => peer.roleName === 'fariscope-streamer');
+        
+        if (stillConnected && stillNoStreamers) {
+          console.log('Confirmed: Room has no streamers. Auto-leaving ended room...');
+          
+          // Show a message to the user
+          showErrorMessage('The room has been ended by the host. You will be disconnected.');
+          
+          // Leave the room
+          try {
+            await hmsActions.leave();
+            console.log('Successfully left ended room');
+            
+            // Go back to the rooms list
+            roomsList.classList.remove('hide');
+            conference.classList.add('hide');
+            controls.classList.add('hide');
+            
+            // Refresh the rooms list
+            loadRooms();
+          } catch (error) {
+            console.error('Error leaving ended room:', error);
+          }
+        }
+      }, 3000); // Wait 3 seconds to confirm room was actually ended
+    }
+  } catch (error) {
+    console.error('Error in room state change handler:', error);
+  }
+}, selectPeers);
 
 // Debug logging function to check if roles are working
 function checkRolesAfterJoin() {
@@ -2556,6 +2727,37 @@ hmsStore.subscribe(() => {
     if (muteText) {
       muteText.textContent = isEnabled ? "Mute" : "Unmute";
     }
+    
+    // Update the microphone SVG based on mute state
+    const micIcon = muteAudio.querySelector('.mic-icon');
+    if (micIcon) {
+      if (isEnabled) {
+        // Unmuted microphone
+        micIcon.innerHTML = `
+          <!-- Microphone body -->
+          <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" 
+                fill="currentColor" />
+          <!-- Stand/base of microphone -->
+          <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-0.49 6-3.39 6-6.92h-2z" 
+                fill="currentColor" />
+        `;
+      } else {
+        // Muted microphone with diagonal line
+        micIcon.innerHTML = `
+          <!-- Microphone body -->
+          <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" 
+                fill="currentColor" />
+          <!-- Stand/base of microphone -->
+          <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-0.49 6-3.39 6-6.92h-2z" 
+                fill="currentColor" />
+          <!-- Diagonal line through the mic (mute indicator) -->
+          <line x1="3" y1="3" x2="21" y2="21" 
+                stroke="currentColor" 
+                stroke-width="2"
+                stroke-linecap="round" />
+        `;
+      }
+    }
   }
 }, selectAudioTrackByPeerID);
 
@@ -2658,6 +2860,48 @@ function unlockIOSAudio() {
     console.error('Error unlocking iOS audio:', err);
   }
 }
+
+// Listen for the custom 'roomDisabled' event
+window.addEventListener('roomDisabled', async (event) => {
+  console.log('Received roomDisabled event:', event.detail);
+  
+  try {
+    // Only handle this if we're not the creator
+    if (isRoomCreator()) {
+      console.log('Ignoring roomDisabled event as we are the creator');
+      return;
+    }
+    
+    // Check if the disabled room matches our current room
+    const localPeer = hmsStore.getState(selectLocalPeer);
+    const currentRoomId = getCurrentRoomId() || localPeer?.roomId;
+    
+    if (currentRoomId && currentRoomId === event.detail.roomId) {
+      console.log('Our current room has been disabled by the creator');
+      
+      // Show message to user
+      showErrorMessage('The room has been ended by the host. You will be disconnected.');
+      
+      // Leave the room
+      try {
+        await hmsActions.leave();
+        console.log('Successfully left disabled room');
+        
+        // Go back to the rooms list
+        roomsList.classList.remove('hide');
+        conference.classList.add('hide');
+        controls.classList.add('hide');
+        
+        // Refresh the rooms list
+        loadRooms();
+      } catch (error) {
+        console.error('Error leaving disabled room:', error);
+      }
+    }
+  } catch (error) {
+    console.error('Error handling roomDisabled event:', error);
+  }
+});
 
 // Initialize the app when DOM is ready
 document.addEventListener('DOMContentLoaded', async () => {
