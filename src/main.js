@@ -96,6 +96,62 @@ let speakingUpdateInterval;
 // Keep track of the room creator's FID
 let roomCreatorFid = null;
 
+// Helper function to show error messages (replacement for alerts)
+function showErrorMessage(message, duration = 5000) {
+  const errorDiv = document.createElement('div');
+  errorDiv.className = 'frame-error-message';
+  errorDiv.textContent = message;
+  errorDiv.style.position = 'fixed';
+  errorDiv.style.top = '10px';
+  errorDiv.style.left = '50%';
+  errorDiv.style.transform = 'translateX(-50%)';
+  errorDiv.style.padding = '10px 20px';
+  errorDiv.style.backgroundColor = 'rgba(244, 67, 54, 0.9)';
+  errorDiv.style.color = 'white';
+  errorDiv.style.borderRadius = '4px';
+  errorDiv.style.zIndex = '9999';
+  errorDiv.style.boxShadow = '0 2px 10px rgba(0,0,0,0.2)';
+  
+  document.body.appendChild(errorDiv);
+  
+  // Remove error after specified duration
+  setTimeout(() => {
+    errorDiv.style.opacity = '0';
+    errorDiv.style.transition = 'opacity 0.5s ease';
+    setTimeout(() => errorDiv.remove(), 500);
+  }, duration);
+  
+  return errorDiv;
+}
+
+// Helper function to show success messages
+function showSuccessMessage(message, duration = 3000) {
+  const successDiv = document.createElement('div');
+  successDiv.className = 'frame-success-message';
+  successDiv.textContent = message;
+  successDiv.style.position = 'fixed';
+  successDiv.style.top = '10px';
+  successDiv.style.left = '50%';
+  successDiv.style.transform = 'translateX(-50%)';
+  successDiv.style.padding = '10px 20px';
+  successDiv.style.backgroundColor = 'rgba(76, 175, 80, 0.9)';
+  successDiv.style.color = 'white';
+  successDiv.style.borderRadius = '4px';
+  successDiv.style.zIndex = '9999';
+  successDiv.style.boxShadow = '0 2px 10px rgba(0,0,0,0.2)';
+  
+  document.body.appendChild(successDiv);
+  
+  // Remove success message after specified duration
+  setTimeout(() => {
+    successDiv.style.opacity = '0';
+    successDiv.style.transition = 'opacity 0.5s ease';
+    setTimeout(() => successDiv.remove(), 500);
+  }, duration);
+  
+  return successDiv;
+}
+
 // API configuration
 const API_CONFIG = {
   BASE_URL: import.meta.env.VITE_API_BASE_URL || 'https://fc-audio-api.kasra.codes',
@@ -452,10 +508,10 @@ async function leaveRoom() {
           try {
             console.log('Disabling room with parameters:', { roomId, address, fid });
             await api.disableRoom(roomId, address, fid);
-            alert('Room ended successfully for everyone.');
+            showSuccessMessage('Room ended successfully for everyone.');
           } catch (disableError) {
             console.error('Failed to disable room:', disableError);
-            alert('Failed to end the room, but you have been disconnected.');
+            showErrorMessage('Failed to end the room, but you have been disconnected.');
           }
         }
       }
@@ -909,7 +965,7 @@ muteAudio.onclick = async () => {
         }
       } catch (err) {
         console.warn('Microphone permission request failed:', err);
-        alert('Please allow microphone access to unmute yourself.');
+        showErrorMessage('Please allow microphone access to unmute yourself.');
         return;
       }
     }
@@ -928,7 +984,7 @@ muteAudio.onclick = async () => {
     renderPeers();
   } catch (error) {
     console.error('Error toggling audio:', error);
-    alert('Failed to change audio state. Please try again.');
+    showErrorMessage('Failed to change audio state. Please try again.');
   }
 };
 
@@ -969,9 +1025,46 @@ if (endRoomBtn) {
       }
       
       // Get the required parameters
-      const roomId = localPeer.roomId;
+      // Try multiple ways to get the room ID
+      let roomId = localPeer.roomId;
+      
+      // If roomId is not available directly, try to find it from other sources
       if (!roomId) {
-        throw new Error('Could not determine room ID');
+        // Try to get room ID from metadata
+        if (metadata?.roomId) {
+          roomId = metadata.roomId;
+        } else {
+          // Try to find it from active room items in the DOM
+          const roomsList = document.querySelectorAll('.room-item');
+          for (const roomItem of roomsList) {
+            if (roomItem.classList.contains('active-room')) {
+              roomId = roomItem.dataset.roomId;
+              break;
+            }
+          }
+        }
+        
+        // If we still can't find it, show inline error instead of alert
+        if (!roomId) {
+          const errorDiv = document.createElement('div');
+          errorDiv.className = 'error-message';
+          errorDiv.textContent = 'Could not determine room ID. Please try rejoining the room.';
+          errorDiv.style.position = 'fixed';
+          errorDiv.style.top = '10px';
+          errorDiv.style.left = '50%';
+          errorDiv.style.transform = 'translateX(-50%)';
+          errorDiv.style.padding = '10px 20px';
+          errorDiv.style.backgroundColor = 'rgba(244, 67, 54, 0.9)';
+          errorDiv.style.borderRadius = '4px';
+          errorDiv.style.zIndex = '9999';
+          
+          document.body.appendChild(errorDiv);
+          
+          // Remove error after 5 seconds
+          setTimeout(() => errorDiv.remove(), 5000);
+          
+          throw new Error('Could not determine room ID');
+        }
       }
       
       // Get ETH address from various sources
@@ -1017,7 +1110,7 @@ if (endRoomBtn) {
       roomStartTime = null;
       
       // Show confirmation and return to room list
-      alert('Room ended successfully');
+      showSuccessMessage('Room ended successfully');
       roomsList.classList.remove('hide');
       conference.classList.add('hide');
       controls.classList.add('hide');
@@ -1027,7 +1120,7 @@ if (endRoomBtn) {
       
     } catch (error) {
       console.error('Failed to end room:', error);
-      alert('Failed to end room: ' + error.message);
+      showErrorMessage('Failed to end room: ' + error.message);
     }
   };
 }
@@ -1041,13 +1134,13 @@ if (promoteListenerBtn) {
     
     // Verify user is a streamer
     if (localPeer?.roleName !== 'fariscope-streamer') {
-      alert('Only streamers can manage participants');
+      showErrorMessage('Only streamers can manage participants');
       return;
     }
     
     // Verify user is the room creator
     if (!isRoomCreator()) {
-      alert('Only the room creator can promote listeners to speakers');
+      showErrorMessage('Only the room creator can promote listeners to speakers');
       return;
     }
     
@@ -1060,11 +1153,11 @@ if (promoteListenerBtn) {
       selectedPeerId = null;
       
       // Show success message
-      alert('Successfully promoted to speaker! They can now talk in the room.');
+      showSuccessMessage('Successfully promoted to speaker! They can now talk in the room.');
       
     } catch (error) {
       console.error('Failed to promote listener:', error);
-      alert('Failed to promote listener: ' + error.message);
+      showErrorMessage('Failed to promote listener: ' + error.message);
     }
   };
 }
@@ -1078,13 +1171,13 @@ if (demoteSpeakerBtn) {
     
     // Verify user is a streamer
     if (localPeer?.roleName !== 'fariscope-streamer') {
-      alert('Only streamers can manage participants');
+      showErrorMessage('Only streamers can manage participants');
       return;
     }
     
     // Verify user is the room creator
     if (!isRoomCreator()) {
-      alert('Only the room creator can demote speakers to listeners');
+      showErrorMessage('Only the room creator can demote speakers to listeners');
       return;
     }
     
@@ -1097,11 +1190,11 @@ if (demoteSpeakerBtn) {
       selectedPeerId = null;
       
       // Show success message
-      alert('Successfully moved back to listener. They can no longer speak in the room.');
+      showSuccessMessage('Successfully moved back to listener. They can no longer speak in the room.');
       
     } catch (error) {
       console.error('Failed to demote speaker:', error);
-      alert('Failed to demote speaker: ' + error.message);
+      showErrorMessage('Failed to demote speaker: ' + error.message);
     }
   };
 }
@@ -1241,6 +1334,14 @@ async function directJoinRoom(event) {
     return;
   }
   
+  // Remove active-room class from all room items
+  document.querySelectorAll('.room-item').forEach(item => {
+    item.classList.remove('active-room');
+  });
+  
+  // Mark this room as active
+  roomItem.classList.add('active-room');
+  
   const roomId = roomItem.dataset.roomId;
   const fid = window.userFid;
   
@@ -1248,8 +1349,28 @@ async function directJoinRoom(event) {
   console.log('Button text:', event.target.textContent);
   
   if (!fid) {
-    console.log('No FID found, showing alert');
-    alert('Please connect with Farcaster first');
+    console.log('No FID found, showing error message');
+    // Create inline error message
+    const errorDiv = document.createElement('div');
+    errorDiv.className = 'error-message';
+    errorDiv.textContent = 'Please connect with Farcaster first';
+    errorDiv.style.position = 'fixed';
+    errorDiv.style.top = '10px';
+    errorDiv.style.left = '50%';
+    errorDiv.style.transform = 'translateX(-50%)';
+    errorDiv.style.padding = '10px 20px';
+    errorDiv.style.backgroundColor = 'rgba(244, 67, 54, 0.9)';
+    errorDiv.style.borderRadius = '4px';
+    errorDiv.style.zIndex = '9999';
+    
+    document.body.appendChild(errorDiv);
+    
+    // Remove error after 5 seconds
+    setTimeout(() => errorDiv.remove(), 5000);
+    
+    // Reset room item
+    roomItem.classList.remove('active-room');
+    
     return;
   }
   
@@ -1373,11 +1494,14 @@ async function directJoinRoom(event) {
     */
   } catch (error) {
     console.error('Failed to join room:', error);
-    alert('Failed to join room: ' + error.message);
+    showErrorMessage('Failed to join room: ' + error.message);
     
     // Reset button
     event.target.disabled = false;
     event.target.textContent = 'Join Room';
+    
+    // Remove active-room class since join failed
+    roomItem.classList.remove('active-room');
   }
 }
 
@@ -1486,22 +1610,43 @@ createRoomForm.onsubmit = async (e) => {
   // If no FID is available, we can't create a room
   if (!fid) {
     console.error('No Farcaster ID available. Please connect via Farcaster Frame.');
-    alert('Please connect your Farcaster account first.');
+    showErrorMessage('Please connect your Farcaster account first.');
     return;
   }
   
   // If no wallet address is available, get it again
   if (!address) {
     try {
+      // Show pending state
+      const pendingMessage = document.createElement('div');
+      pendingMessage.className = 'frame-pending-message';
+      pendingMessage.textContent = 'Connecting to wallet...';
+      pendingMessage.style.position = 'fixed';
+      pendingMessage.style.top = '10px';
+      pendingMessage.style.left = '50%';
+      pendingMessage.style.transform = 'translateX(-50%)';
+      pendingMessage.style.padding = '10px 20px';
+      pendingMessage.style.backgroundColor = 'rgba(33, 150, 243, 0.9)';
+      pendingMessage.style.color = 'white';
+      pendingMessage.style.borderRadius = '4px';
+      pendingMessage.style.zIndex = '9999';
+      pendingMessage.style.boxShadow = '0 2px 10px rgba(0,0,0,0.2)';
+      
+      document.body.appendChild(pendingMessage);
+      
       address = await frameHelpers.getWalletAddress();
+      
+      // Remove pending message
+      pendingMessage.remove();
+      
       if (!address) {
         console.error('No wallet address available');
-        alert('Please connect your wallet first.');
+        showErrorMessage('Please connect your wallet first.');
         return;
       }
     } catch (error) {
       console.error('Failed to get wallet address:', error);
-      alert('Failed to get wallet address. Please try again.');
+      showErrorMessage('Failed to get wallet address. Please try again.');
       return;
     }
   }
@@ -1520,7 +1665,7 @@ createRoomForm.onsubmit = async (e) => {
     });
     
     if (existingRoom) {
-      alert('You already have an active room. Please join your existing room or end it before creating a new one.');
+      showErrorMessage('You already have an active room. Please join your existing room or end it before creating a new one.');
       createRoomModal.classList.add('hide');
       // Auto-join the existing room
       const roomItem = document.querySelector(`[data-room-id="${existingRoom.id}"]`);
@@ -1533,18 +1678,42 @@ createRoomForm.onsubmit = async (e) => {
       return;
     }
     
+    // Show creating room pending state
+    const creatingRoomMessage = document.createElement('div');
+    creatingRoomMessage.className = 'frame-pending-message';
+    creatingRoomMessage.textContent = 'Creating room...';
+    creatingRoomMessage.style.position = 'fixed';
+    creatingRoomMessage.style.top = '10px';
+    creatingRoomMessage.style.left = '50%';
+    creatingRoomMessage.style.transform = 'translateX(-50%)';
+    creatingRoomMessage.style.padding = '10px 20px';
+    creatingRoomMessage.style.backgroundColor = 'rgba(33, 150, 243, 0.9)';
+    creatingRoomMessage.style.color = 'white';
+    creatingRoomMessage.style.borderRadius = '4px';
+    creatingRoomMessage.style.zIndex = '9999';
+    creatingRoomMessage.style.boxShadow = '0 2px 10px rgba(0,0,0,0.2)';
+    
+    document.body.appendChild(creatingRoomMessage);
+    
     const { code, roomId } = await api.createRoom(address, fid);
+    
+    // Update pending state
+    creatingRoomMessage.textContent = 'Room created! Preparing to join...';
+    
     createRoomModal.classList.add('hide');
     
     // Check for microphone permission
     if (!hasMicrophonePermission) {
       // Try to request permission if we don't have it
       try {
+        // Update pending message
+        creatingRoomMessage.textContent = 'Requesting microphone access...';
+        
         hasMicrophonePermission = await checkMicrophonePermission();
       } catch (err) {
         console.warn('Failed to get microphone permission:', err);
         // Show a warning but continue - audio-only rooms can work in listen-only mode
-        alert('Microphone access was denied. You may be able to listen only.');
+        showErrorMessage('Microphone access was denied. You may be able to listen only.');
       }
     }
 
@@ -1562,6 +1731,9 @@ createRoomForm.onsubmit = async (e) => {
     
     // Use username from profile if available
     const userName = userProfile?.username || `FID:${fid}`;
+    
+    // Update pending message before joining
+    creatingRoomMessage.textContent = 'Joining room...';
     
     // No need for video preview since it's audio-only
     await hmsActions.join({
@@ -1587,16 +1759,29 @@ createRoomForm.onsubmit = async (e) => {
       // Add error handling for permissions
       onError: (error) => {
         console.error("HMS join error:", error);
-        alert("Failed to join with audio. You may need to grant microphone permissions.");
+        showErrorMessage("Failed to join with audio. You may need to grant microphone permissions.");
       }
     });
+    
+    // Remove pending message after successful join
+    creatingRoomMessage.style.opacity = '0';
+    creatingRoomMessage.style.transition = 'opacity 0.5s ease';
+    setTimeout(() => creatingRoomMessage.remove(), 500);
+    
+    // Show success message
+    showSuccessMessage('Room created successfully! You are now speaking.');
 
     // Start the room timer
     startRoomTimer();
 
   } catch (error) {
     console.error('Failed to create/join room:', error);
-    alert('Failed to create room: ' + error.message);
+    showErrorMessage('Failed to create room: ' + error.message);
+    
+    // Clean up pending message if it's still there
+    if (document.querySelector('.frame-pending-message')) {
+      document.querySelector('.frame-pending-message').remove();
+    }
   }
 };
 
