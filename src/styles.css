@@ -682,6 +682,12 @@ input.error {
   margin-bottom: 24px;
 }
 
+.rooms-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .modal {
   position: fixed;
   top: 0;

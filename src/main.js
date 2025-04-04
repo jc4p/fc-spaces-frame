@@ -645,9 +645,30 @@ function renderPeers() {
     startRoomTimer();
   }
   
-  // Show/hide host controls if we're the streamer
+  // Check if we're the host (streamer role) AND the creator
   const isHost = localPeer?.roleName === 'fariscope-streamer';
+  
+  // Check if we're the creator of the room
+  let isCreator = false;
+  try {
+    if (localPeer?.metadata) {
+      const metadata = JSON.parse(localPeer.metadata);
+      isCreator = !!metadata.isCreator;
+    }
+  } catch (e) {
+    console.warn('Error parsing metadata when checking creator status:', e);
+  }
+  
+  // Show host controls only if user is a streamer
   hostControls.classList.toggle('hide', !isHost);
+  
+  // Find and show/hide the End Room button for creators only 
+  const endRoomBtn = document.getElementById("end-room");
+  if (endRoomBtn) {
+    // Only show End Room button if the user is the room creator
+    endRoomBtn.classList.toggle('hide', !isCreator);
+    console.log('End Room button visibility:', !isCreator ? 'hidden' : 'visible', 'isCreator:', isCreator);
+  }
   
   // Render speakers list
   renderSpeakersList(speakers, localPeer);
@@ -1038,7 +1059,7 @@ muteAudio.onclick = async () => {
       hasMicrophonePermission = await checkMicrophonePermission();
     }
     
-    // If we still don't have permissions, ask for them
+    // If we still don't have permissions, ask for them but don't show a toast
     if (!hasMicrophonePermission) {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -1048,7 +1069,7 @@ muteAudio.onclick = async () => {
         }
       } catch (err) {
         console.warn('Microphone permission request failed:', err);
-        showErrorMessage('Please allow microphone access to unmute yourself.');
+        // Just log the error but don't show a toast to the user
         return;
       }
     }
@@ -1428,6 +1449,25 @@ if (promoteListenerBtn) {
     }
     
     try {
+      // Get the peer object before we change their role
+      const peers = hmsStore.getState(selectPeers);
+      const targetPeer = peers.find(peer => peer.id === selectedPeerId);
+      
+      if (!targetPeer) {
+        throw new Error('Selected peer not found');
+      }
+      
+      console.log('Promoting listener to speaker:', targetPeer.name);
+      
+      // First ensure the user is unmuted so they can talk after promotion
+      try {
+        // This ensures the user's audio track is enabled
+        await hmsActions.setRemoteTrackEnabled(targetPeer.audioTrack, true);
+        console.log('Enabled remote audio track for promoted user');
+      } catch (audioError) {
+        console.warn('Failed to enable audio track, continuing with role change:', audioError);
+      }
+      
       // Use the 100ms SDK to change role directly
       await hmsActions.changeRoleOfPeer(selectedPeerId, 'fariscope-streamer', true);
       
@@ -1435,8 +1475,13 @@ if (promoteListenerBtn) {
       listenerActionModal.classList.add('hide');
       selectedPeerId = null;
       
-      // Show success message
+      // Show success message to room creator
       showSuccessMessage('Successfully promoted to speaker! They can now talk in the room.');
+      
+      // Force refresh the peer list to update UI
+      setTimeout(() => {
+        renderPeers();
+      }, 1000);
       
     } catch (error) {
       console.error('Failed to promote listener:', error);
@@ -1559,6 +1604,41 @@ function onConnection(isConnected) {
     // Start the speaking detection interval
     if (!speakingUpdateInterval) {
       speakingUpdateInterval = setInterval(updateSpeakingStatus, 500);
+    }
+    
+    // Ensure proper audio permissions for streamers
+    // This helps resolve issues where streamers can't be heard by others
+    if (isStreamer) {
+      console.log('Running post-connection audio setup for streamer');
+      // Delay slightly to ensure HMS is fully initialized
+      setTimeout(async () => {
+        try {
+          // Force audio track publishing for streamer
+          const localPeer = hmsStore.getState(selectLocalPeer);
+          
+          // Check if the user actually has a published audio track
+          const audioTrack = hmsStore.getState(selectAudioTrackByPeerID(localPeer?.id));
+          
+          if (!audioTrack || !audioTrack.id) {
+            console.warn('Streamer has no audio track published, trying to republish');
+            
+            // First try to toggle mute to force track creation
+            const isEnabled = hmsStore.getState(selectIsLocalAudioEnabled);
+            // Toggle off then on
+            await hmsActions.setLocalAudioEnabled(false);
+            await new Promise(resolve => setTimeout(resolve, 300));
+            await hmsActions.setLocalAudioEnabled(true);
+            
+            // Try to get the track again
+            const newAudioTrack = hmsStore.getState(selectAudioTrackByPeerID(localPeer?.id));
+            if (newAudioTrack && newAudioTrack.id) {
+              console.log('Successfully created audio track after reconnection');
+            }
+          }
+        } catch (error) {
+          console.warn('Error in post-connection audio setup:', error);
+        }
+      }, 2000);
     }
   } else {
     // Clean up room timer
@@ -1818,15 +1898,15 @@ async function directJoinRoom(event) {
     expectedRoleInput.value = userRole;
     document.body.appendChild(expectedRoleInput);
     
-    // If joining as speaker, default to unmuted for audio
+    // Check if user is joining as the room creator or a regular speaker
     const isJoiningAsSpeaker = userRole === 'fariscope-streamer';
-    const defaultAudioMuted = !isJoiningAsSpeaker;
+    const isJoiningAsCreator = isLikelyCreator || serverIsCreator || isCreatorFromData || buttonText === 'Resume Room';
     
-    console.log(`User with FID ${fid} is joining as ${userRole}`);
+    console.log(`User with FID ${fid} is joining as ${userRole}, isCreator: ${isJoiningAsCreator}`);
     
-    // Important: For streamers, we now always set audio to initially muted
-    // and unmute after joining to avoid HMS bugs
-    const initialAudioMuted = true; // Always start muted and then unmute if needed
+    // For all users, we start muted to avoid HMS bugs, then auto-unmute creators
+    // This prevents issues with audio permissions and ensures consistent behavior
+    const initialAudioMuted = true; // Always start muted to avoid HMS bugs
     
     await hmsActions.join({
       userName,
@@ -1847,26 +1927,39 @@ async function directJoinRoom(event) {
       })
     });
     
-    // For streamers, ensure audio permissions and unmute after a short delay
-    if (isJoiningAsSpeaker) {
-      console.log('User is joining as speaker, will force unmute after delay');
+    // For streamers or creators, ensure audio permissions and unmute after a short delay
+    if (isJoiningAsSpeaker || isJoiningAsCreator) {
+      // Only auto-unmute creators
+      const shouldAutoUnmute = isJoiningAsCreator;
+      console.log('User is joining as speaker/creator, will force unmute after delay:', shouldAutoUnmute);
       
       // Force unmute after a short delay to ensure HMS is fully initialized
       setTimeout(async () => {
         try {
-          // Ensure microphone permission is granted
+          // Ensure microphone permission is granted - silently
           if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            if (stream) {
-              stream.getTracks().forEach(track => track.stop());
-              hasMicrophonePermission = true;
-              console.log('Microphone permission confirmed');
+            try {
+              const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+              if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                hasMicrophonePermission = true;
+                console.log('Microphone permission confirmed');
+              }
+            } catch (permError) {
+              console.warn('Could not get microphone permission:', permError);
+              // Continue anyway - don't show an error toast
             }
+          }
+          
+          // Only continue with unmuting if this is a creator
+          if (!shouldAutoUnmute) {
+            console.log('Not auto-unmuting as user is not the creator');
+            return;
           }
           
           // Batch of unmute operations similar to our unmute function
           const forceUnmute = async () => {
-            console.log('Running force unmute for streamer after join');
+            console.log('Running force unmute for creator after join');
             const localPeer = hmsStore.getState(selectLocalPeer);
             
             try {
@@ -1886,7 +1979,7 @@ async function directJoinRoom(event) {
                 await hmsActions.setEnabledTrack(localPeer.audioTrack, true);
               }
               
-              console.log('Force unmute completed');
+              console.log('Force unmute completed - creator should now be audible');
               
               // Update UI to show unmuted state
               const muteText = muteAudio.querySelector('span');
@@ -2142,18 +2235,17 @@ createRoomForm.onsubmit = async (e) => {
     
     createRoomModal.classList.add('hide');
     
-    // Check for microphone permission
+    // Check for microphone permission (silently - no toast)
     if (!hasMicrophonePermission) {
-      // Try to request permission if we don't have it
       try {
-        // Update pending message
-        creatingRoomMessage.textContent = 'Requesting microphone access...';
+        // Update pending message but don't show it in a toast
+        creatingRoomMessage.textContent = 'Preparing your audio room...';
         
+        // Try to request permission without alarming the user
         hasMicrophonePermission = await checkMicrophonePermission();
       } catch (err) {
         console.warn('Failed to get microphone permission:', err);
-        // Show a warning but continue - audio-only rooms can work in listen-only mode
-        showErrorMessage('Microphone access was denied. You may be able to listen only.');
+        // Don't show an error - just log it and continue
       }
     }
 
@@ -2611,6 +2703,47 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // Load rooms regardless of Frame status
     loadRooms();
+    
+    // Set up refresh button event listener
+    const refreshRoomsBtn = document.getElementById('refresh-rooms-btn');
+    if (refreshRoomsBtn) {
+      refreshRoomsBtn.addEventListener('click', async () => {
+        // Show loading state on the button
+        const originalContent = refreshRoomsBtn.innerHTML;
+        refreshRoomsBtn.innerHTML = '<svg class="rotating" width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12.0002 4.75V6.25C12.0002 6.66421 11.6644 7 11.2502 7C10.836 7 10.5002 6.66421 10.5002 6.25V4.75C10.5002 4.33579 10.836 4 11.2502 4C11.6644 4 12.0002 4.33579 12.0002 4.75Z" fill="currentColor" /><path d="M11.2502 20C11.6644 20 12.0002 19.6642 12.0002 19.25V17.75C12.0002 17.3358 11.6644 17 11.2502 17C10.836 17 10.5002 17.3358 10.5002 17.75V19.25C10.5002 19.6642 10.836 20 11.2502 20Z" fill="currentColor" /><path d="M4.75 12C4.75 12.4142 4.41421 12.75 4 12.75C3.58579 12.75 3.25 12.4142 3.25 12C3.25 11.5858 3.58579 11.25 4 11.25C4.41421 11.25 4.75 11.5858 4.75 12Z" fill="currentColor" /><path d="M20 12.75C20.4142 12.75 20.75 12.4142 20.75 12C20.75 11.5858 20.4142 11.25 20 11.25C19.5858 11.25 19.25 11.5858 19.25 12C19.25 12.4142 19.5858 12.75 20 12.75Z" fill="currentColor" /><path d="M7.05023 7.05029C7.33579 6.76473 7.33579 6.30681 7.05023 6.02124C6.76466 5.73568 6.30674 5.73568 6.02118 6.02124L5.12868 6.91374C4.84312 7.19931 4.84312 7.65723 5.12868 7.94279C5.41425 8.22836 5.87216 8.22836 6.15773 7.94279L7.05023 7.05029Z" fill="currentColor" /><path d="M18.9791 17.9792C18.6935 17.6937 18.2356 17.6937 17.95 17.9792C17.6645 18.2648 17.6645 18.7227 17.95 19.0083L18.8425 19.9008C19.1281 20.1863 19.586 20.1863 19.8716 19.9008C20.1571 19.6152 20.1571 19.1573 19.8716 18.8717L18.9791 17.9792Z" fill="currentColor" /><path d="M17.9498 6.02124C17.6642 6.30681 17.6642 6.76473 17.9498 7.05029L18.8423 7.94279C19.1279 8.22836 19.5858 8.22836 19.8714 7.94279C20.1569 7.65723 20.1569 7.19931 19.8714 6.91374L18.9789 6.02124C18.6933 5.73568 18.2354 5.73568 17.9498 6.02124Z" fill="currentColor" /><path d="M6.02082 17.9792L5.12832 18.8717C4.84276 19.1573 4.84276 19.6152 5.12832 19.9008C5.41389 20.1863 5.8718 20.1863 6.15737 19.9008L7.04987 19.0083C7.33543 18.7227 7.33543 18.2648 7.04987 17.9792C6.7643 17.6937 6.30639 17.6937 6.02082 17.9792Z" fill="currentColor" /></svg>';
+        refreshRoomsBtn.disabled = true;
+        
+        // Add rotating animation style if it doesn't exist
+        if (!document.getElementById('rotating-style')) {
+          const style = document.createElement('style');
+          style.id = 'rotating-style';
+          style.textContent = `
+            .rotating {
+              animation: rotate 1s linear infinite;
+            }
+            @keyframes rotate {
+              from { transform: rotate(0deg); }
+              to { transform: rotate(360deg); }
+            }
+          `;
+          document.head.appendChild(style);
+        }
+        
+        try {
+          // Load rooms
+          await loadRooms();
+          console.log('Rooms refreshed successfully');
+        } catch (error) {
+          console.error('Failed to refresh rooms:', error);
+        } finally {
+          // Restore button state
+          setTimeout(() => {
+            refreshRoomsBtn.innerHTML = originalContent;
+            refreshRoomsBtn.disabled = false;
+          }, 500); // Small delay to ensure the loading animation is visible
+        }
+      });
+    }
     
   } catch (error) {
     console.error('App initialization failed:', error);
