@@ -658,6 +658,19 @@ input.error {
   margin-right: 4px;
 }
 
+.participant-count {
+  display: inline-flex;
+  align-items: center;
+  font-size: 13px;
+  color: var(--secondary-text);
+  margin-left: 8px;
+}
+
+.participant-count:before {
+  content: '•';
+  margin-right: 4px;
+}
+
 .join-room-btn {
   background-color: var(--accent-color);
   border: none;

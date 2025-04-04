@@ -2321,6 +2321,7 @@ async function loadRooms() {
               <span class="live-badge">LIVE</span>
               ${createdAt ? `<span class="created-at">${createdAt}</span>` : ''}
               <span class="listeners-info">${isCurrentUserRoom ? 'Join as Speaker (Your Room)' : 'Join as Listener'}</span>
+              ${room.participant_count !== undefined ? `<span class="participant-count">${room.participant_count} ${room.participant_count === 1 ? 'person' : 'people'}</span>` : ''}
             </div>
           </div>
           <button class="btn-primary join-room-btn">${isCurrentUserRoom ? 'Resume Room' : 'Join Room'}</button>
