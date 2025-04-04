@@ -1,0 +1,17 @@
+{
+  "accountAssociation": {
+    "header": "eyJmaWQiOjk3NzIzMywidHlwZSI6ImN1c3RvZHkiLCJrZXkiOiIweGE2N0JhMDI4MTIzMWVCOUUyZWE0Y0Y5Nzg5NGMwYjBiNUI4MDFDYzYifQ",
+    "payload": "eyJkb21haW4iOiJmYy1hdWRpby1jaGF0Lmthc3JhLmNvZGVzIn0",
+    "signature": "MHhlZDFmMWZiZTdmYzk1MmU2NDE3ODM2YWMxMzljMTc0ZDk0NDRmZWQyOTU1Mjk3OWYxNjcyNWUyZDI2N2EwMmIzNWM0OTRmN2RiODkzZjU1YTBkYzAzODY5MDZiN2Y4NzBlMGQzZDI5ZTEzYjY4ZTk3NmE5NjI3YzE1ZWQ3NWM2YTFj"
+  },
+  "frame": {
+    "version": "1",
+    "name": "FC Audio Chat",
+    "iconUrl": "https://cover-art.kasra.codes/fc-audio-chat-square.png",
+    "homeUrl": "https://fc-audio-chat.kasra.codes",
+    "imageUrl": "https://cover-art.kasra.codes/fc-audio-chat-rectangle.png",
+    "buttonTitle": "Start Chatting",
+    "splashImageUrl": "https://cover-art.kasra.codes/fc-audio-chat-square.png",
+    "splashBackgroundColor": "#6442BF"
+  }
+}
