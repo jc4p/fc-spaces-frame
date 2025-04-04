@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>FC AUDIO CHAT</title>
+    <link rel="stylesheet" href="src/styles.css" />
+    <link rel="stylesheet" href="https://use.typekit.net/tcr3qai.css">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Permissions-Policy" content="microphone=self, camera=self" />
+    <meta name="fc:frame" content='{"version":"next","imageUrl":"https://cover-art.kasra.codes/fc-audio-chat-rectangle.png","button":{"title":"Start Chatting","action":{"type":"launch_frame","name":"FC Audio Chat","url":"http://localhost:5173","splashImageUrl":"https://cover-art.kasra.codes/fc-audio-chat-square.png","splashBackgroundColor":"#6442BF"}}}' />
+  </head>
+
+  <body>
+    <header>
+      <div class="header-left">
+        <h2>FC AUDIO CHAT</h2>
+        <span id="user-greeting" class="user-greeting"></span>
+      </div>
+      <button id="leave-btn" class="btn-danger hide">Leave Room</button>
+    </header>
+    <form id="join" class="hide">
+      <h2>Join Room</h2>
+      <div class="input-container">
+        <input id="name" type="text" name="username" placeholder="Your name" />
+      </div>
+      <button type="button" class="btn-primary" id="join-btn">
+        Join
+      </button>
+    </form>
+
+    <div id="rooms-list" class="rooms-section">
+      <div class="rooms-header">
+        <h2>Available Rooms</h2>
+        <button id="create-room-btn" class="btn-primary">Create Room</button>
+      </div>
+      <div class="rooms-container">
+        <!-- Rooms will be populated here by loadRooms() -->
+      </div>
+    </div>
+
+    <div id="create-room-modal" class="modal hide">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>Create Room</h3>
+          <button class="close-button" data-modal="create-room-modal">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div id="frame-status" class="frame-status">
+            <span class="status-indicator"></span>
+            <span class="status-text">Checking Farcaster connection...</span>
+          </div>
+          <div id="frame-info" class="frame-info hide">
+            <div class="info-item">
+              <span class="info-label">FID:</span>
+              <span id="info-fid" class="info-value">-</span>
+            </div>
+            <div class="info-item">
+              <span class="info-label">Wallet:</span>
+              <span id="info-wallet" class="info-value">-</span>
+            </div>
+          </div>
+          <form id="create-room-form">
+            <input id="eth-address" type="hidden" />
+            <input id="fid" type="hidden" />
+            <div id="frame-not-connected" class="frame-not-connected hide">
+              <p>Please connect via Farcaster Frame to create a room.</p>
+            </div>
+            <div id="create-room-actions" class="create-room-actions">
+              <button type="submit" class="btn-primary">Create Room as Speaker</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <div id="conference" class="conference-section hide">
+      <div class="spaces-container">
+        <div class="spaces-header">
+          <div class="room-info">
+            <h3 id="room-title">Audio Room</h3>
+            <div class="room-status">
+              <span class="live-indicator">LIVE</span>
+              <span id="room-duration">00:00</span>
+            </div>
+          </div>
+          <div class="room-actions">
+            <button id="share-warpcast" class="btn-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M18 8C19.6569 8 21 6.65685 21 5C21 3.34315 19.6569 2 18 2C16.3431 2 15 3.34315 15 5C15 5.12548 15.0077 5.24917 15.0227 5.37063L8.08509 9.04413C7.54346 8.40222 6.8089 8 6 8C4.34315 8 3 9.34315 3 11C3 12.6569 4.34315 14 6 14C6.8089 14 7.54346 13.5978 8.08509 12.9559L15.0227 16.6294C15.0077 16.7508 15 16.8745 15 17C15 18.6569 16.3431 20 18 20C19.6569 20 21 18.6569 21 17C21 15.3431 19.6569 14 18 14C17.1911 14 16.4565 14.4022 15.9149 15.0441L8.97733 11.3706C8.99229 11.2492 9 11.1255 9 11C9 10.8745 8.99229 10.7508 8.97733 10.6294L15.9149 6.95587C16.4565 7.59778 17.1911 8 18 8Z" fill="currentColor"/>
+              </svg>
+            </button>
+            <button id="leave-room-btn" class="btn-danger-small">Leave</button>
+          </div>
+        </div>
+        
+        <div class="spaces-content">
+          <div class="speakers-section">
+            <h4>Speakers</h4>
+            <div id="speakers-list" class="speakers-list"></div>
+          </div>
+          
+          <div class="listeners-section">
+            <h4>Listeners <span id="listeners-count" class="count-badge">0</span></h4>
+            <div id="listeners-list" class="listeners-list"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="controls" class="control-bar hide">
+      <button id="mute-aud" class="btn-control">
+        <svg class="mic-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M12 14C13.6569 14 15 12.6569 15 11V5C15 3.34315 13.6569 2 12 2C10.3431 2 9 3.34315 9 5V11C9 12.6569 10.3431 14 12 14Z" fill="currentColor"/>
+          <path d="M18.9273 11C18.9273 11.5523 18.4796 12 17.9273 12C17.375 12 16.9273 11.5523 16.9273 11C16.9273 8.23858 14.7614 6 12 6C9.23858 6 7 8.23858 7 11C7 11.5523 6.55228 12 6 12C5.44772 12 5 11.5523 5 11C5 7.13401 8.13401 4 12 4C15.866 4 18.9273 7.13401 18.9273 11Z" fill="currentColor"/>
+          <path d="M7 11C7 11.5523 6.55228 12 6 12C5.44772 12 5 11.5523 5 11C5 7.13401 8.13401 4 12 4C15.866 4 19 7.13401 19 11C19 11.5523 18.5523 12 18 12C17.4477 12 17 11.5523 17 11C17 8.23858 14.7614 6 12 6C9.23858 6 7 8.23858 7 11Z" fill="currentColor"/>
+          <path d="M12 16C15.866 16 19 12.866 19 9C19 8.44772 19.4477 8 20 8C20.5523 8 21 8.44772 21 9C21 13.9706 16.9706 18 12 18C7.02944 18 3 13.9706 3 9C3 8.44772 3.44772 8 4 8C4.55228 8 5 8.44772 5 9C5 12.866 8.13401 16 12 16Z" fill="currentColor"/>
+          <path d="M12 18C11.4477 18 11 18.4477 11 19V21C11 21.5523 11.4477 22 12 22C12.5523 22 13 21.5523 13 21V19C13 18.4477 12.5523 18 12 18Z" fill="currentColor"/>
+        </svg>
+        <span>Mute</span>
+      </button>
+      
+      <div id="host-controls" class="host-controls hide">
+        <button id="end-room" class="btn-control danger">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M10.5858 12L4.92893 17.6569C4.53841 18.0474 4.53841 18.6805 4.92893 19.0711C5.31946 19.4616 5.95262 19.4616 6.34315 19.0711L12 13.4142L17.6569 19.0711C18.0474 19.4616 18.6805 19.4616 19.0711 19.0711C19.4616 18.6805 19.4616 18.0474 19.0711 17.6569L13.4142 12L19.0711 6.34315C19.4616 5.95262 19.4616 5.31946 19.0711 4.92893C18.6805 4.53841 18.0474 4.53841 17.6569 4.92893L12 10.5858L6.34315 4.92893C5.95262 4.53841 5.31946 4.53841 4.92893 4.92893C4.53841 5.31946 4.53841 5.95262 4.92893 6.34315L10.5858 12Z" fill="currentColor"/>
+          </svg>
+          <span>End Room</span>
+        </button>
+      </div>
+    </div>
+    
+    <div id="listener-action-modal" class="modal hide">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>Listener Actions</h3>
+          <button class="close-button" data-modal="listener-action-modal">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="listener-info">
+            <div class="listener-avatar">
+              <span id="listener-initial">?</span>
+            </div>
+            <span id="listener-name" class="listener-name-display">User Name</span>
+          </div>
+          <div class="action-buttons">
+            <button id="promote-listener" class="btn-primary">Invite to Speak</button>
+            <button id="demote-speaker" class="btn-danger hide">Move to Listeners</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="src/main.js"></script>
+  </body>
+</html>

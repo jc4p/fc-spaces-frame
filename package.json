@@ -1,0 +1,19 @@
+{
+  "name": "fariscope",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "vite": "^6.0.1"
+  },
+  "dependencies": {
+    "@100mslive/hms-video-store": "^0.12.30",
+    "@farcaster/frame-sdk": "^0.0.32",
+    "dotenv": "^16.4.1"
+  }
+}
