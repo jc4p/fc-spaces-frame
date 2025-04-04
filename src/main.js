@@ -630,7 +630,7 @@ function renderPeers() {
     if (streamerId.startsWith('FID:')) {
       streamerId = streamerId.split('FID:')[1];
     }
-    roomTitle.textContent = `Audio Room hosted by FID:${streamerId}`;
+    roomTitle.textContent = `${streamerId}'s Room`;
   }
   
   // Separate speakers (streamers) and listeners (viewers)
