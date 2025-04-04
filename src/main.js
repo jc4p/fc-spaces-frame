@@ -585,8 +585,26 @@ function renderPeers() {
   }
   
   // Separate speakers (streamers) and listeners (viewers)
-  const speakers = peers.filter(peer => peer.roleName === 'fariscope-streamer');
-  const listeners = peers.filter(peer => peer.roleName === 'fariscope-viewer');
+  // Check both the role and metadata to determine if someone should be a speaker
+  const speakers = peers.filter(peer => {
+    // Check role name
+    if (peer.roleName === 'fariscope-streamer') return true;
+    
+    // Check metadata for creator flag as fallback
+    try {
+      if (peer.metadata) {
+        const metadata = JSON.parse(peer.metadata);
+        if (metadata.isCreator === true) return true;
+      }
+    } catch (e) {
+      console.warn('Error parsing peer metadata:', e);
+    }
+    
+    return false;
+  });
+  
+  // Everyone who's not a speaker is a listener
+  const listeners = peers.filter(peer => !speakers.find(s => s.id === peer.id));
   
   // If the room is starting for the first time, set up the duration timer
   if (speakers.length && !roomStartTime) {
@@ -1240,6 +1258,52 @@ function onConnection(isConnected) {
       hostControls.classList.add("hide");
     }
     
+    // Try to unlock iOS audio again now that we've actually joined
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+    if (isIOS) {
+      console.log('Attempting to unlock iOS audio after successful room join');
+      unlockIOSAudio();
+      
+      // For iOS, add a visible "Tap to enable audio" button if needed
+      // This is a fallback in case the automatic unlocking doesn't work
+      const audioUnlockDiv = document.createElement('div');
+      audioUnlockDiv.id = 'ios-audio-unlock';
+      audioUnlockDiv.innerHTML = `
+        <div class="ios-audio-unlock-overlay">
+          <button class="btn-primary unlock-audio-btn">Tap to Enable Audio</button>
+        </div>
+      `;
+      audioUnlockDiv.style.position = 'fixed';
+      audioUnlockDiv.style.top = '0';
+      audioUnlockDiv.style.left = '0';
+      audioUnlockDiv.style.width = '100%';
+      audioUnlockDiv.style.height = '100%';
+      audioUnlockDiv.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+      audioUnlockDiv.style.zIndex = '9999';
+      audioUnlockDiv.style.display = 'flex';
+      audioUnlockDiv.style.justifyContent = 'center';
+      audioUnlockDiv.style.alignItems = 'center';
+      
+      document.body.appendChild(audioUnlockDiv);
+      
+      // Add event listener to the button
+      document.querySelector('.unlock-audio-btn').addEventListener('click', (e) => {
+        e.preventDefault();
+        // Try to unlock audio
+        unlockIOSAudio();
+        
+        // Remove the overlay
+        document.body.removeChild(audioUnlockDiv);
+      });
+      
+      // Auto-hide after 10 seconds if not clicked
+      setTimeout(() => {
+        if (document.getElementById('ios-audio-unlock')) {
+          document.body.removeChild(audioUnlockDiv);
+        }
+      }, 10000);
+    }
+    
     // Start the speaking detection interval
     if (!speakingUpdateInterval) {
       speakingUpdateInterval = setInterval(updateSpeakingStatus, 500);
@@ -1340,6 +1404,14 @@ form.appendChild(roomCodeInput);
 // Direct join room function to skip the form
 async function directJoinRoom(event) {
   console.log('Join/Resume button clicked', event.target);
+  
+  // Try to unlock iOS audio on this user interaction
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+  if (isIOS) {
+    console.log('Attempting to unlock iOS audio on room join click');
+    unlockIOSAudio();
+  }
+  
   const roomItem = event.target.closest('.room-item');
   console.log('Found room item:', roomItem);
   if (!roomItem || !event.target.classList.contains('join-room-btn')) {
@@ -1459,7 +1531,24 @@ async function directJoinRoom(event) {
     });
     
     // Use role from server if available, otherwise use our own logic
-    const userRole = serverRole || (isCreatorJoining ? 'fariscope-streamer' : 'fariscope-viewer');
+    // Force streamer role if any creator indicator is true
+    // Double-check all possible indicators that this user is a creator
+    const isLikelyCreator = isCreatorJoining || 
+                          serverIsCreator || 
+                          isCreatorFromButton || 
+                          isCreatorFromData || 
+                          fidMatches || 
+                          addressMatches ||
+                          buttonText === 'Resume Room';
+                          
+    const userRole = isLikelyCreator ? 'fariscope-streamer' : (serverRole || 'fariscope-viewer');
+    
+    console.log('Final role decision:', {
+      isLikelyCreator,
+      userRole,
+      serverRole,
+      isCreatorJoining
+    });
     
     // Store expected role in hidden input for debugging
     const expectedRoleInput = document.getElementById('expected-role') || 
@@ -1489,6 +1578,7 @@ async function directJoinRoom(event) {
       metaData: JSON.stringify({
         fid: fid,
         isCreator: serverIsCreator !== undefined ? serverIsCreator : isCreatorJoining, // Use server value if available
+        address: userAddress || '', // Include address in metadata
         profile: userProfile || null
       })
     });
@@ -1615,6 +1705,13 @@ async function loadRooms() {
 // Update the create room form handler for audio-only rooms
 createRoomForm.onsubmit = async (e) => {
   e.preventDefault();
+  
+  // Try to unlock iOS audio on this user interaction
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+  if (isIOS) {
+    console.log('Attempting to unlock iOS audio on create room submit');
+    unlockIOSAudio();
+  }
   
   // Get values from hidden inputs which should be populated by Frame SDK
   let address = document.getElementById("eth-address").value;
@@ -1936,6 +2033,59 @@ hmsStore.subscribe((localPeer) => {
   }
 }, selectLocalPeer);
 
+// Helper function to unlock iOS audio
+function unlockIOSAudio() {
+  console.log('Attempting to unlock iOS audio...');
+  
+  // Create a dummy audio context and play an empty sound
+  try {
+    // For iOS Safari we need to create an AudioContext on user gesture
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    
+    if (AudioContext) {
+      const audioCtx = new AudioContext();
+      
+      // Resume audio context
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume().then(() => {
+          console.log('AudioContext resumed successfully');
+        }).catch(err => {
+          console.error('Failed to resume AudioContext:', err);
+        });
+      }
+      
+      // Create and play a silent audio element
+      const silentSound = document.createElement('audio');
+      silentSound.src = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4LjM1LjEwNAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAABIgD///////////////////////////////////////////8AAAA8TEFNRTMuMTAwAQAAAAAAAAAAABQgJAUHQQAB9AAAASIttayFAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA//sQZAAP8AAAaQAAAAgAAA0gAAABAAABpAAAACAAADSAAAAETEFNRTMuMTAwVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU=';
+      silentSound.preload = 'auto';
+      silentSound.volume = 0.01; // Nearly silent
+      silentSound.setAttribute('playsinline', '');
+      silentSound.setAttribute('webkit-playsinline', '');
+      
+      // Add to DOM temporarily
+      document.body.appendChild(silentSound);
+      
+      // Try to play
+      const playPromise = silentSound.play();
+      
+      if (playPromise !== undefined) {
+        playPromise.then(() => {
+          console.log('Silent sound played successfully, iOS audio unlocked');
+          // Remove after playing
+          setTimeout(() => {
+            document.body.removeChild(silentSound);
+          }, 1000);
+        }).catch(err => {
+          console.warn('Failed to play silent sound:', err);
+          document.body.removeChild(silentSound);
+        });
+      }
+    }
+  } catch (err) {
+    console.error('Error unlocking iOS audio:', err);
+  }
+}
+
 // Initialize the app when DOM is ready
 document.addEventListener('DOMContentLoaded', async () => {
   try {
@@ -1953,6 +2103,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Check for microphone permission early
     hasMicrophonePermission = await checkMicrophonePermission();
     console.log('Microphone permission:', hasMicrophonePermission ? 'granted' : 'denied/undetermined');
+    
+    // Add iOS audio unlock
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+    if (isIOS) {
+      console.log('iOS device detected, will unlock audio on user interaction');
+    }
     
     // Initialize Frame SDK
     try {
