@@ -2267,7 +2267,14 @@ async function loadRooms() {
       return;
     }
     
-    roomsContainer.innerHTML = rooms.map(room => {
+    // Sort rooms by participant count (highest first)
+    const sortedRooms = [...rooms].sort((a, b) => {
+      const countA = a.participant_count || 0;
+      const countB = b.participant_count || 0;
+      return countB - countA;
+    });
+    
+    roomsContainer.innerHTML = sortedRooms.map(room => {
       // Extract FID from room description or metadata
       let fid = '';
       if (room.description && room.description.includes('FID:')) {
