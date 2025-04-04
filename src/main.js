@@ -336,13 +336,13 @@ const api = {
     return response.json();
   },
 
-  async joinRoom(roomId, fid) {
+  async joinRoom(roomId, fid, address) {
     const response = await fetch(`${API_CONFIG.BASE_URL}/join-room`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ roomId, fid }),
+      body: JSON.stringify({ roomId, fid, address }),
     });
     if (!response.ok) {
       const error = await response.json();
@@ -1473,7 +1473,7 @@ async function directJoinRoom(event) {
     }
     
     // Join the room directly without showing the form
-    const { code, role: serverRole, isCreator: serverIsCreator } = await api.joinRoom(roomId, fid);
+    const { code, role: serverRole, serverIsCreator } = await api.joinRoom(roomId, fid, userAddress);
     
     console.log('Server response:', { code, serverRole, serverIsCreator });
     
@@ -1532,21 +1532,26 @@ async function directJoinRoom(event) {
     
     // Use role from server if available, otherwise use our own logic
     // Force streamer role if any creator indicator is true
-    // Double-check all possible indicators that this user is a creator
-    const isLikelyCreator = isCreatorJoining || 
-                          serverIsCreator || 
-                          isCreatorFromButton || 
-                          isCreatorFromData || 
-                          fidMatches || 
-                          addressMatches ||
-                          buttonText === 'Resume Room';
+    // First check if server explicitly told us the user is a creator
+    // If serverIsCreator is defined, trust it as the definitive source
+    // Otherwise, fall back to client-side checks
+    const isLikelyCreator = (serverIsCreator !== undefined) 
+                          ? serverIsCreator 
+                          : (isCreatorJoining || 
+                             isCreatorFromButton || 
+                             isCreatorFromData || 
+                             fidMatches || 
+                             addressMatches ||
+                             buttonText === 'Resume Room');
                           
-    const userRole = isLikelyCreator ? 'fariscope-streamer' : (serverRole || 'fariscope-viewer');
+    // Trust serverRole if provided, otherwise determine based on creator status
+    const userRole = serverRole || (isLikelyCreator ? 'fariscope-streamer' : 'fariscope-viewer');
     
     console.log('Final role decision:', {
       isLikelyCreator,
       userRole,
       serverRole,
+      serverIsCreator,
       isCreatorJoining
     });
     
