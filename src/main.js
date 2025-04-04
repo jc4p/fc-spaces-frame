@@ -478,29 +478,63 @@ async function leaveRoom() {
       return;
     }
     
-    // Check metadata to see if this user is the creator
+    // Check multiple ways to determine if this user is the creator
     let isCreator = false;
     let metadata = {};
     
     try {
+      // Method 1: Check metadata
       if (localPeer.metadata) {
         metadata = JSON.parse(localPeer.metadata);
-        isCreator = !!metadata.isCreator;
+        if (metadata.isCreator) {
+          isCreator = true;
+        }
       }
+      
+      // Method 2: Check role - streamers are likely creators
+      if (localPeer.roleName === 'fariscope-streamer') {
+        isCreator = true;
+      }
+      
+      // Method 3: Check the room creator FID against window.userFid
+      if (roomCreatorFid && window.userFid && 
+          roomCreatorFid.toString() === window.userFid.toString()) {
+        isCreator = true;
+      }
+      
     } catch (e) {
       console.warn('Failed to parse metadata when leaving:', e);
     }
     
-    console.log('Leaving room, isCreator:', isCreator, 'metadata:', metadata);
+    console.log('Leaving room, isCreator:', isCreator, 'metadata:', metadata, 'role:', localPeer.roleName);
     
     // If user is the creator, offer to disable the room
     if (isCreator) {
       // Get required info for disabling the room
       const roomId = localPeer.roomId;
       const fid = metadata.fid || window.userFid;
-      const address = metadata.address || document.getElementById("eth-address")?.value;
       
-      if (roomId && (fid || address)) {
+      // Get ETH address using multiple methods
+      let address = '';
+      try {
+        // First try metadata
+        if (metadata.address) {
+          address = metadata.address;
+        } 
+        // Then try input field
+        else if (document.getElementById("eth-address")?.value) {
+          address = document.getElementById("eth-address").value;
+        } 
+        // Finally try the Frame SDK
+        else {
+          address = await frameHelpers.getWalletAddress() || '';
+        }
+        console.log('Got ETH address for room disabling:', address);
+      } catch (e) {
+        console.warn('Failed to get ETH address:', e);
+      }
+      
+      if (roomId && fid) {
         // Ask user if they want to end the room for everyone
         const shouldDisable = confirm('Do you want to end this room for everyone? Click Cancel to leave without ending the room.');
         
@@ -1003,7 +1037,57 @@ muteAudio.onclick = async () => {
     
     // Toggle audio state
     const audioEnabled = !hmsStore.getState(selectIsLocalAudioEnabled);
-    await hmsActions.setLocalAudioEnabled(audioEnabled);
+    
+    // Add logging to debug
+    console.log('Toggling audio state:', {
+      currentEnabled: hmsStore.getState(selectIsLocalAudioEnabled),
+      willSetTo: audioEnabled,
+      localPeer: hmsStore.getState(selectLocalPeer)?.roleName
+    });
+    
+    try {
+      // Sometimes there's a bug with 100ms permissions, especially for creators
+      // Try both the regular method and the track-specific method
+      await hmsActions.setLocalAudioEnabled(audioEnabled);
+      
+      // Force enable for streamers by directly manipulating audio tracks if needed
+      const localPeer = hmsStore.getState(selectLocalPeer);
+      if (localPeer?.roleName === 'fariscope-streamer' && audioEnabled) {
+        const audioTrack = hmsStore.getState(selectAudioTrackByPeerID(localPeer.id));
+        if (audioTrack) {
+          console.log('Directly enabling audio track for streamer');
+          await hmsActions.setEnabledTrack(audioTrack.id, true);
+        }
+      }
+    } catch (audioError) {
+      console.error('Error setting audio enabled state:', audioError);
+      showErrorMessage('Failed to change audio state. Trying alternative method...');
+      
+      // Fallback for streamers - try more aggressive methods
+      try {
+        const localPeer = hmsStore.getState(selectLocalPeer);
+        if (localPeer?.audioTrack) {
+          await hmsActions.setEnabledTrack(localPeer.audioTrack, audioEnabled);
+        }
+      } catch (fallbackError) {
+        console.error('Fallback audio toggle failed:', fallbackError);
+      }
+    }
+    
+    // Check if toggle was successful
+    setTimeout(() => {
+      const currentState = hmsStore.getState(selectIsLocalAudioEnabled);
+      console.log('After toggle, audio enabled state is:', currentState);
+      
+      if (currentState !== audioEnabled) {
+        console.warn('Audio state did not change as expected - attempting force refresh');
+        // Force a refresh of HMS connection if toggling failed
+        const localPeer = hmsStore.getState(selectLocalPeer);
+        if (localPeer?.roleName === 'fariscope-streamer') {
+          showErrorMessage('Having trouble with audio controls. Try leaving and rejoining the room.');
+        }
+      }
+    }, 500);
     
     // Update button text
     const muteText = muteAudio.querySelector('span');
