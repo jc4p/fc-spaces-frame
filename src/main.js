@@ -1472,23 +1472,13 @@ async function directJoinRoom(event) {
       console.warn('Failed to fetch profile, will continue anyway:', err);
     }
     
-    // Join the room directly without showing the form
-    const { code, role: serverRole, serverIsCreator } = await api.joinRoom(roomId, fid, userAddress);
-    
-    console.log('Server response:', { code, serverRole, serverIsCreator });
-    
-    // Join with HMS
-    const authToken = await hmsActions.getAuthTokenByRoomCode({ roomCode: code });
-    
-    const userName = userProfile?.username || `FID:${fid}`;
-    
     // Check if this room was created by the current user
     // We need to examine the room information to determine this
     const creatorFid = roomItem.dataset.creatorFid;
     const creatorAddress = roomItem.dataset.creatorAddress;
     
     // Get the current user's ETH address if available
-    let userAddress;
+    let userAddress = '';
     try {
       userAddress = document.getElementById("eth-address")?.value || '';
       if (!userAddress) {
@@ -1501,6 +1491,16 @@ async function directJoinRoom(event) {
       console.warn('Failed to get wallet address:', e);
       userAddress = '';
     }
+    
+    // Join the room directly without showing the form
+    const { code, role: serverRole, serverIsCreator } = await api.joinRoom(roomId, fid, userAddress);
+    
+    console.log('Server response:', { code, serverRole, serverIsCreator });
+    
+    // Join with HMS
+    const authToken = await hmsActions.getAuthTokenByRoomCode({ roomCode: code });
+    
+    const userName = userProfile?.username || `FID:${fid}`;
     
     // Check if either FID or ETH address matches
     const fidMatches = creatorFid && fid && fid.toString() === creatorFid.toString();
