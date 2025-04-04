@@ -720,7 +720,18 @@ function renderSpeakersList(speakers, localPeer) {
     const profile = getProfileFromPeer(speaker);
     const displayName = getDisplayName(speaker);
     const isLocal = speaker.id === localPeer?.id;
-    const isMuted = !speaker.audioEnabled;
+    
+    // Get accurate mute state - for local peer, use the global state selector
+    let isMuted;
+    if (isLocal) {
+      // For local peer, use the most reliable source of truth
+      isMuted = !hmsStore.getState(selectIsLocalAudioEnabled);
+      console.log('Rendering local speaker, audio muted state:', isMuted);
+    } else {
+      // For remote peers, use their peer object state
+      isMuted = !speaker.audioEnabled;
+    }
+    
     const isHost = true; // All speakers are hosts in this app
     const isSpeaking = speakingPeers.get(speaker.id); // Check if the peer is currently speaking
     
@@ -731,10 +742,8 @@ function renderSpeakersList(speakers, localPeer) {
       : speaker.name.charAt(0).toUpperCase();
     
     // Only show mute badge if the speaker is actually muted
-    // For the local user, check if they have mic permissions before showing the mute badge
-    const showMuteBadge = isLocal 
-      ? (isMuted && hasMicrophonePermission) // Only show mute badge for local user if they have mic permissions
-      : isMuted; // For remote users, show based on their actual mute state
+    // For local user, show mute badge if they're actually muted, regardless of permissions
+    const showMuteBadge = isMuted;
     
     // Only show interaction hint for non-local peers if user is creator
     const showInteractionHint = !isLocal && userIsCreator;
@@ -776,7 +785,18 @@ function renderListenersList(listeners, localPeer, isHost) {
     const profile = getProfileFromPeer(listener);
     const displayName = getDisplayName(listener);
     const isLocal = listener.id === localPeer?.id;
-    const isMuted = !listener.audioEnabled;
+    
+    // Get accurate mute state - for local peer, use the global state selector
+    let isMuted;
+    if (isLocal) {
+      // For local peer, use the most reliable source of truth
+      isMuted = !hmsStore.getState(selectIsLocalAudioEnabled);
+      console.log('Rendering local listener, audio muted state:', isMuted);
+    } else {
+      // For remote peers, use their peer object state
+      isMuted = !listener.audioEnabled;
+    }
+    
     const isSpeaking = speakingPeers.get(listener.id); // Check if the peer is currently speaking
     
     // Check if we have a profile picture
@@ -786,10 +806,8 @@ function renderListenersList(listeners, localPeer, isHost) {
       : listener.name.charAt(0).toUpperCase();
     
     // Only show mute badge if the listener is actually muted
-    // For the local user, check if they have mic permissions before showing the mute badge
-    const showMuteBadge = isLocal 
-      ? (isMuted && hasMicrophonePermission) // Only show mute badge for local user if they have mic permissions
-      : isMuted; // For remote users, show based on their actual mute state
+    // Use the accurate mute state we determined above
+    const showMuteBadge = isMuted;
     
     // Only show interaction hint for non-local peers if user is creator
     const showInteractionHint = !isLocal && userIsCreator;
@@ -1172,6 +1190,13 @@ muteAudio.onclick = async () => {
     
     // Force refresh the UI to update mute badges
     renderPeers();
+    
+    // Extra UI refresh with a small delay to ensure HMS SDK state has propagated
+    setTimeout(() => {
+      console.log('Delayed UI refresh after mute/unmute');
+      // This ensures the UI reflects the final state after all HMS SDK operations are complete
+      renderPeers();
+    }, 300);
   } catch (error) {
     console.error('Error toggling audio:', error);
     showErrorMessage('Failed to change audio state. Please try again.');
@@ -1195,6 +1220,43 @@ if (shareWarpcastBtn) {
   };
 }
 
+// Create a utility function to store current room ID
+// We'll update this whenever we join a room
+let currentRoomId = null;
+function setCurrentRoomId(roomId) {
+  if (roomId) {
+    console.log('Setting current room ID:', roomId);
+    currentRoomId = roomId;
+    
+    // Also save to localStorage as backup
+    try {
+      localStorage.setItem('fariscope_current_room_id', roomId);
+    } catch (e) {
+      console.warn('Could not save room ID to localStorage:', e);
+    }
+  }
+}
+
+function getCurrentRoomId() {
+  // If we have currentRoomId in memory, use that first
+  if (currentRoomId) {
+    return currentRoomId;
+  }
+  
+  // Try to get from localStorage as backup
+  try {
+    const savedRoomId = localStorage.getItem('fariscope_current_room_id');
+    if (savedRoomId) {
+      console.log('Recovered room ID from localStorage:', savedRoomId);
+      return savedRoomId;
+    }
+  } catch (e) {
+    console.warn('Could not get room ID from localStorage:', e);
+  }
+  
+  return null;
+}
+
 // End Room button handler
 if (endRoomBtn) {
   endRoomBtn.onclick = async () => {
@@ -1214,47 +1276,78 @@ if (endRoomBtn) {
         console.warn('Failed to parse peer metadata:', e);
       }
       
-      // Get the required parameters
-      // Try multiple ways to get the room ID
-      let roomId = localPeer.roomId;
+      // Get the required parameters - try multiple reliable ways to get the room ID
       
-      // If roomId is not available directly, try to find it from other sources
+      // APPROACH 1: Try from our global storage - this is the most reliable
+      let roomId = getCurrentRoomId();
+      console.log('Got room ID from global store:', roomId);
+      
+      // APPROACH 2: Try from peer object
+      if (!roomId && localPeer?.roomId) {
+        roomId = localPeer.roomId;
+        console.log('Got room ID from peer object:', roomId);
+      }
+      
+      // APPROACH 3: Try from metadata
+      if (!roomId && metadata?.roomId) {
+        roomId = metadata.roomId;
+        console.log('Got room ID from metadata:', roomId);
+      }
+      
+      // APPROACH 4: Try from active room element
       if (!roomId) {
-        // Try to get room ID from metadata
-        if (metadata?.roomId) {
-          roomId = metadata.roomId;
-        } else {
-          // Try to find it from active room items in the DOM
-          const roomsList = document.querySelectorAll('.room-item');
-          for (const roomItem of roomsList) {
-            if (roomItem.classList.contains('active-room')) {
+        // Try all room items, not just active-room, since active-room might not be set correctly
+        const roomItems = document.querySelectorAll('.room-item');
+        
+        // First try to find active room
+        for (const roomItem of roomItems) {
+          if (roomItem.classList.contains('active-room') && roomItem.dataset.roomId) {
+            roomId = roomItem.dataset.roomId;
+            console.log('Found room ID from active room item:', roomId);
+            break;
+          }
+        }
+        
+        // If still not found, try to find a room that's marked as belonging to this user
+        if (!roomId) {
+          for (const roomItem of roomItems) {
+            if (roomItem.dataset.isCreator === 'true' && roomItem.dataset.roomId) {
               roomId = roomItem.dataset.roomId;
+              console.log('Found room ID from creator room item:', roomId);
               break;
             }
           }
         }
         
-        // If we still can't find it, show inline error instead of alert
-        if (!roomId) {
-          const errorDiv = document.createElement('div');
-          errorDiv.className = 'error-message';
-          errorDiv.textContent = 'Could not determine room ID. Please try rejoining the room.';
-          errorDiv.style.position = 'fixed';
-          errorDiv.style.top = '10px';
-          errorDiv.style.left = '50%';
-          errorDiv.style.transform = 'translateX(-50%)';
-          errorDiv.style.padding = '10px 20px';
-          errorDiv.style.backgroundColor = 'rgba(244, 67, 54, 0.9)';
-          errorDiv.style.borderRadius = '4px';
-          errorDiv.style.zIndex = '9999';
-          
-          document.body.appendChild(errorDiv);
-          
-          // Remove error after 5 seconds
-          setTimeout(() => errorDiv.remove(), 5000);
-          
-          throw new Error('Could not determine room ID');
+        // If still not found, as a last resort, just use the first room in the list
+        if (!roomId && roomItems.length > 0) {
+          roomId = roomItems[0].dataset.roomId;
+          console.log('Using first available room as last resort:', roomId);
         }
+      }
+      
+      // If we still can't find it after all approaches, show error
+      if (!roomId) {
+        console.error('All approaches to find room ID failed');
+        
+        const errorDiv = document.createElement('div');
+        errorDiv.className = 'error-message';
+        errorDiv.textContent = 'Unable to determine room ID. Please try using the Leave Room button instead.';
+        errorDiv.style.position = 'fixed';
+        errorDiv.style.top = '10px';
+        errorDiv.style.left = '50%';
+        errorDiv.style.transform = 'translateX(-50%)';
+        errorDiv.style.padding = '10px 20px';
+        errorDiv.style.backgroundColor = 'rgba(244, 67, 54, 0.9)';
+        errorDiv.style.borderRadius = '4px';
+        errorDiv.style.zIndex = '9999';
+        
+        document.body.appendChild(errorDiv);
+        
+        // Remove error after 5 seconds
+        setTimeout(() => errorDiv.remove(), 5000);
+        
+        throw new Error('Could not determine room ID after trying all methods');
       }
       
       // Get ETH address from various sources
@@ -1654,6 +1747,9 @@ async function directJoinRoom(event) {
     // Join the room directly without showing the form
     const { code, role: serverRole, serverIsCreator } = await api.joinRoom(roomId, fid, userAddress);
     
+    // Save the room ID to our global store for reliable access later
+    setCurrentRoomId(roomId);
+    
     console.log('Server response:', { code, serverRole, serverIsCreator });
     
     // Join with HMS
@@ -2038,6 +2134,9 @@ createRoomForm.onsubmit = async (e) => {
     
     const { code, roomId } = await api.createRoom(address, fid);
     
+    // Save the room ID to our global store for reliable access later
+    setCurrentRoomId(roomId);
+    
     // Update pending state
     creatingRoomMessage.textContent = 'Room created! Preparing to join...';
     
@@ -2291,11 +2390,30 @@ setInterval(loadRooms, 30000); // Every 30 seconds
 // Subscribe to peer updates
 hmsStore.subscribe(renderPeers, selectPeers);
 
-// Also specifically listen for audio status changes to update mute badges
+// Listen for audio status changes to update mute badges - added multiple selectors to ensure UI updates 
 hmsStore.subscribe(() => {
-  // Audio status changed, re-render peers to update mute badges
+  console.log('Local audio state changed, re-rendering UI');
   renderPeers();
 }, selectIsLocalAudioEnabled);
+
+// Also listen for any peer audio track changes
+hmsStore.subscribe(() => {
+  console.log('Peer audio track changes detected, re-rendering UI');
+  renderPeers();
+  
+  // Force update UI for local peer specifically
+  const localPeer = hmsStore.getState(selectLocalPeer);
+  if (localPeer) {
+    const isEnabled = hmsStore.getState(selectIsLocalAudioEnabled);
+    console.log('Local peer audio state:', isEnabled ? 'UNMUTED' : 'MUTED');
+    
+    // Force update the mute/unmute button text
+    const muteText = muteAudio.querySelector('span');
+    if (muteText) {
+      muteText.textContent = isEnabled ? "Mute" : "Unmute";
+    }
+  }
+}, selectAudioTrackByPeerID);
 
 // Add debug logging for peer updates
 hmsStore.subscribe((peers) => {
