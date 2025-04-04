@@ -804,6 +804,11 @@ function renderSpeakersList(speakers, localPeer) {
       item.addEventListener('click', handlePeerClick);
     });
   }
+  
+  // Add avatar click handlers for all users - enable profile viewing for everyone
+  document.querySelectorAll('.speaker-item .avatar').forEach(avatar => {
+    avatar.addEventListener('click', handleAvatarClick);
+  });
 }
 
 // Render the listeners list
@@ -867,10 +872,49 @@ function renderListenersList(listeners, localPeer, isHost) {
       item.addEventListener('click', handlePeerClick);
     });
   }
+  
+  // Add avatar click handlers for all users - enable profile viewing for everyone
+  document.querySelectorAll('.listener-item .avatar').forEach(avatar => {
+    avatar.addEventListener('click', handleAvatarClick);
+  });
 }
 
-// Handle click on peer avatar
+// Handle click on avatar to view profile
+function handleAvatarClick(e) {
+  e.stopPropagation(); // Prevent bubbling to the handlePeerClick
+  
+  const peerItem = e.currentTarget.closest('.speaker-item, .listener-item');
+  if (!peerItem) return;
+  
+  const peerId = peerItem.dataset.peerId;
+  const peers = hmsStore.getState(selectPeers);
+  
+  // Find the clicked peer
+  const peer = peers.find(p => p.id === peerId);
+  if (!peer) return;
+  
+  // Try to get profile information to find FID
+  try {
+    if (peer.metadata) {
+      const metadata = JSON.parse(peer.metadata);
+      if (metadata.fid) {
+        console.log("Opening profile for FID:", metadata.fid);
+        frameHelpers.viewProfile(metadata.fid);
+      }
+    }
+  } catch (error) {
+    console.error("Error parsing metadata:", error);
+  }
+}
+
+// Handle click on peer item (for moderation actions)
 function handlePeerClick(e) {
+  // Don't process if the click was directly on an avatar (that's handled by handleAvatarClick)
+  if (e.target.closest('.avatar')) {
+    // Let the avatar click handler take care of this
+    return;
+  }
+  
   const peerItem = e.currentTarget;
   const peerId = peerItem.dataset.peerId;
   const role = peerItem.dataset.role;
