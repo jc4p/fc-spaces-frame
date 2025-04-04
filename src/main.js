@@ -1036,58 +1036,133 @@ muteAudio.onclick = async () => {
     }
     
     // Toggle audio state
-    const audioEnabled = !hmsStore.getState(selectIsLocalAudioEnabled);
+    const currentlyEnabled = hmsStore.getState(selectIsLocalAudioEnabled);
+    const audioEnabled = !currentlyEnabled;
     
     // Add logging to debug
     console.log('Toggling audio state:', {
-      currentEnabled: hmsStore.getState(selectIsLocalAudioEnabled),
+      currentEnabled: currentlyEnabled,
       willSetTo: audioEnabled,
       localPeer: hmsStore.getState(selectLocalPeer)?.roleName
     });
     
-    try {
-      // Sometimes there's a bug with 100ms permissions, especially for creators
-      // Try both the regular method and the track-specific method
-      await hmsActions.setLocalAudioEnabled(audioEnabled);
+    const localPeer = hmsStore.getState(selectLocalPeer);
+    
+    // For streamers (room creators), we need to use a different approach
+    if (localPeer?.roleName === 'fariscope-streamer' && audioEnabled) {
+      console.log('Special handling for streamer unmute');
       
-      // Force enable for streamers by directly manipulating audio tracks if needed
-      const localPeer = hmsStore.getState(selectLocalPeer);
-      if (localPeer?.roleName === 'fariscope-streamer' && audioEnabled) {
-        const audioTrack = hmsStore.getState(selectAudioTrackByPeerID(localPeer.id));
-        if (audioTrack) {
-          console.log('Directly enabling audio track for streamer');
-          await hmsActions.setEnabledTrack(audioTrack.id, true);
+      // Create a batch of operations to try multiple unmute strategies
+      const unmuteBatch = async () => {
+        try {
+          // 1. First try the standard way
+          await hmsActions.setLocalAudioEnabled(true);
+          
+          // 2. Try to get the audio track directly
+          let audioTrack;
+          try {
+            audioTrack = hmsStore.getState(selectAudioTrackByPeerID(localPeer.id));
+            if (audioTrack?.id) {
+              console.log('Found audio track:', audioTrack.id);
+              await hmsActions.setEnabledTrack(audioTrack.id, true);
+            }
+          } catch (e) {
+            console.warn('Error enabling specific track:', e);
+          }
+          
+          // 3. Try accessing audioTrack property of localPeer
+          if (localPeer.audioTrack) {
+            console.log('Using localPeer.audioTrack:', localPeer.audioTrack);
+            await hmsActions.setEnabledTrack(localPeer.audioTrack, true);
+          }
+          
+          // 4. Try forcing a new publish
+          try {
+            if (navigator.mediaDevices) {
+              const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+              if (stream && stream.getAudioTracks().length > 0) {
+                const track = stream.getAudioTracks()[0];
+                console.log('Got new audio track from getUserMedia');
+                // We don't actually use this track directly but getting it
+                // can sometimes "wake up" the audio system
+                track.enabled = true;
+                // Release the track to avoid duplicate audio
+                setTimeout(() => track.stop(), 500);
+              }
+            }
+          } catch (mediaError) {
+            console.warn('Error getting media stream:', mediaError);
+          }
+          
+          console.log('Completed unmute operations batch');
+        } catch (error) {
+          console.error('Unmute batch operations failed:', error);
         }
-      }
-    } catch (audioError) {
-      console.error('Error setting audio enabled state:', audioError);
-      showErrorMessage('Failed to change audio state. Trying alternative method...');
+      };
       
-      // Fallback for streamers - try more aggressive methods
+      // Run the batch operations
+      unmuteBatch().then(() => {
+        // Check success after a delay
+        setTimeout(() => {
+          const nowEnabled = hmsStore.getState(selectIsLocalAudioEnabled);
+          if (nowEnabled) {
+            console.log('Successfully unmuted audio');
+            showSuccessMessage('Microphone unmuted');
+          } else {
+            console.warn('Failed to unmute audio');
+            // One last desperate attempt
+            hmsActions.setLocalAudioEnabled(true).catch(e => console.error('Final unmute attempt failed:', e));
+          }
+        }, 300);
+      });
+    } else {
+      // Standard mute/unmute for regular operations (including muting for creators)
       try {
-        const localPeer = hmsStore.getState(selectLocalPeer);
-        if (localPeer?.audioTrack) {
-          await hmsActions.setEnabledTrack(localPeer.audioTrack, audioEnabled);
+        await hmsActions.setLocalAudioEnabled(audioEnabled);
+        
+        if (!audioEnabled) {
+          console.log('Successfully muted audio');
         }
-      } catch (fallbackError) {
-        console.error('Fallback audio toggle failed:', fallbackError);
+      } catch (audioError) {
+        console.error('Error setting audio enabled state:', audioError);
+        showErrorMessage('Failed to change audio state. Trying alternative method...');
+        
+        // Try track-specific method as fallback
+        try {
+          if (localPeer.audioTrack) {
+            await hmsActions.setEnabledTrack(localPeer.audioTrack, audioEnabled);
+          }
+        } catch (fallbackError) {
+          console.error('Fallback audio toggle failed:', fallbackError);
+        }
       }
     }
     
     // Check if toggle was successful
     setTimeout(() => {
       const currentState = hmsStore.getState(selectIsLocalAudioEnabled);
-      console.log('After toggle, audio enabled state is:', currentState);
+      console.log('After toggle, audio enabled state is:', currentState, 'expected:', audioEnabled);
       
       if (currentState !== audioEnabled) {
-        console.warn('Audio state did not change as expected - attempting force refresh');
-        // Force a refresh of HMS connection if toggling failed
-        const localPeer = hmsStore.getState(selectLocalPeer);
-        if (localPeer?.roleName === 'fariscope-streamer') {
-          showErrorMessage('Having trouble with audio controls. Try leaving and rejoining the room.');
+        console.warn('Audio state did not change as expected');
+        if (audioEnabled && localPeer?.roleName === 'fariscope-streamer') {
+          showErrorMessage('Audio unmute issue detected. If you still can\'t speak, try leaving and rejoining.');
+          
+          // Update UI to at least show correct state
+          const muteButton = document.getElementById('mute-aud');
+          if (muteButton) {
+            const muteIcon = muteButton.querySelector('i');
+            if (muteIcon) {
+              muteIcon.className = 'fa fa-microphone-slash';
+            }
+            const muteText = muteButton.querySelector('span');
+            if (muteText) {
+              muteText.textContent = 'Unmute';
+            }
+          }
         }
       }
-    }, 500);
+    }, 800);
     
     // Update button text
     const muteText = muteAudio.querySelector('span');
@@ -1653,6 +1728,10 @@ async function directJoinRoom(event) {
     
     console.log(`User with FID ${fid} is joining as ${userRole}`);
     
+    // Important: For streamers, we now always set audio to initially muted
+    // and unmute after joining to avoid HMS bugs
+    const initialAudioMuted = true; // Always start muted and then unmute if needed
+    
     await hmsActions.join({
       userName,
       authToken,
@@ -1660,7 +1739,7 @@ async function directJoinRoom(event) {
       // Debug all params
       debug: true,
       settings: {
-        isAudioMuted: defaultAudioMuted,
+        isAudioMuted: initialAudioMuted,
         isVideoMuted: true, // Always keep video muted since this is audio-only
       },
       rememberDeviceSelection: true,
@@ -1671,6 +1750,69 @@ async function directJoinRoom(event) {
         profile: userProfile || null
       })
     });
+    
+    // For streamers, ensure audio permissions and unmute after a short delay
+    if (isJoiningAsSpeaker) {
+      console.log('User is joining as speaker, will force unmute after delay');
+      
+      // Force unmute after a short delay to ensure HMS is fully initialized
+      setTimeout(async () => {
+        try {
+          // Ensure microphone permission is granted
+          if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            if (stream) {
+              stream.getTracks().forEach(track => track.stop());
+              hasMicrophonePermission = true;
+              console.log('Microphone permission confirmed');
+            }
+          }
+          
+          // Batch of unmute operations similar to our unmute function
+          const forceUnmute = async () => {
+            console.log('Running force unmute for streamer after join');
+            const localPeer = hmsStore.getState(selectLocalPeer);
+            
+            try {
+              // Standard method
+              await hmsActions.setLocalAudioEnabled(true);
+              
+              // Track-specific method
+              if (localPeer?.id) {
+                const audioTrack = hmsStore.getState(selectAudioTrackByPeerID(localPeer.id));
+                if (audioTrack?.id) {
+                  await hmsActions.setEnabledTrack(audioTrack.id, true);
+                }
+              }
+              
+              // Direct track access method
+              if (localPeer?.audioTrack) {
+                await hmsActions.setEnabledTrack(localPeer.audioTrack, true);
+              }
+              
+              console.log('Force unmute completed');
+              
+              // Update UI to show unmuted state
+              const muteText = muteAudio.querySelector('span');
+              if (muteText) {
+                muteText.textContent = "Mute";
+              }
+              
+              // Force refresh the UI
+              renderPeers();
+            } catch (error) {
+              console.error('Force unmute error:', error);
+            }
+          };
+          
+          // Run the unmute operations
+          forceUnmute();
+          
+        } catch (error) {
+          console.error('Post-join unmute error:', error);
+        }
+      }, 2000); // 2-second delay to ensure HMS is fully initialized
+    }
     
     // Note: This debug call uses an endpoint that doesn't exist in SERVER_README.md
     // Commenting it out since it's for debugging only and the endpoint may not exist
@@ -1934,14 +2076,15 @@ createRoomForm.onsubmit = async (e) => {
     // Update pending message before joining
     creatingRoomMessage.textContent = 'Joining room...';
     
-    // No need for video preview since it's audio-only
+    // Use same approach as room joining - start muted then force unmute
+    // This avoids the bug where streamer can't unmute
     await hmsActions.join({
       userName,
       authToken,
       // Important: specify the role to ensure we join as a streamer (speaker)
       role: 'fariscope-streamer', // This ensures we join as a streamer/speaker
       settings: {
-        isAudioMuted: false, // Streamer starts unmuted
+        isAudioMuted: true, // Start muted and then force unmute
         isVideoMuted: true,  // No video for audio rooms
       },
       rememberDeviceSelection: true,
@@ -1961,6 +2104,85 @@ createRoomForm.onsubmit = async (e) => {
         showErrorMessage("Failed to join with audio. You may need to grant microphone permissions.");
       }
     });
+    
+    // Force unmute after a short delay to ensure proper initialization
+    console.log('User is creating a room, will force unmute after delay');
+    setTimeout(async () => {
+      try {
+        // Batch of unmute operations similar to our unmute function
+        const forceUnmute = async () => {
+          console.log('Running force unmute for room creator');
+          const localPeer = hmsStore.getState(selectLocalPeer);
+          
+          try {
+            // Standard method first
+            await hmsActions.setLocalAudioEnabled(true);
+            
+            // Track-specific method
+            if (localPeer?.id) {
+              const audioTrack = hmsStore.getState(selectAudioTrackByPeerID(localPeer.id));
+              if (audioTrack?.id) {
+                console.log('Found audio track:', audioTrack.id);
+                await hmsActions.setEnabledTrack(audioTrack.id, true);
+              }
+            }
+            
+            // Direct track access method
+            if (localPeer?.audioTrack) {
+              console.log('Using localPeer.audioTrack:', localPeer.audioTrack);
+              await hmsActions.setEnabledTrack(localPeer.audioTrack, true);
+            }
+            
+            // Try forcing a new publish
+            try {
+              if (navigator.mediaDevices) {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                if (stream && stream.getAudioTracks().length > 0) {
+                  const track = stream.getAudioTracks()[0];
+                  console.log('Got new audio track from getUserMedia');
+                  // We don't use this directly but it can help "wake up" the audio
+                  track.enabled = true;
+                  // Release the track to avoid duplicate audio
+                  setTimeout(() => track.stop(), 500);
+                }
+              }
+            } catch (mediaError) {
+              console.warn('Error getting media stream:', mediaError);
+            }
+            
+            console.log('Room creator force unmute completed');
+            
+            // Update UI to show unmuted state
+            const muteText = muteAudio.querySelector('span');
+            if (muteText) {
+              muteText.textContent = "Mute";
+            }
+            
+            // Force refresh the UI
+            renderPeers();
+          } catch (error) {
+            console.error('Room creator force unmute error:', error);
+          }
+        };
+        
+        // Run the unmute operations
+        forceUnmute();
+        
+        // Check success after a delay
+        setTimeout(() => {
+          const audioEnabled = hmsStore.getState(selectIsLocalAudioEnabled);
+          if (audioEnabled) {
+            console.log('Successfully unmuted audio for room creator');
+            showSuccessMessage('You are now unmuted and can speak!');
+          } else {
+            console.warn('Failed to unmute room creator');
+            showErrorMessage('Having trouble with your microphone. Try clicking the Unmute button or rejoining the room.');
+          }
+        }, 500);
+      } catch (error) {
+        console.error('Post-join unmute error for room creator:', error);
+      }
+    }, 2000); // 2-second delay to ensure HMS is fully initialized
     
     // Remove pending message after successful join
     creatingRoomMessage.style.opacity = '0';
