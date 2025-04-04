@@ -49,24 +49,17 @@
             <span class="status-indicator"></span>
             <span class="status-text">Checking Farcaster connection...</span>
           </div>
-          <div id="frame-info" class="frame-info hide">
-            <div class="info-item">
-              <span class="info-label">FID:</span>
-              <span id="info-fid" class="info-value">-</span>
-            </div>
-            <div class="info-item">
-              <span class="info-label">Wallet:</span>
-              <span id="info-wallet" class="info-value">-</span>
-            </div>
-          </div>
           <form id="create-room-form">
             <input id="eth-address" type="hidden" />
             <input id="fid" type="hidden" />
             <div id="frame-not-connected" class="frame-not-connected hide">
               <p>Please connect via Farcaster Frame to create a room.</p>
             </div>
+            <p class="create-room-description">
+              Start an audio chat room where you can talk with other Farcaster users. You'll join as the host with speaking privileges.
+            </p>
             <div id="create-room-actions" class="create-room-actions">
-              <button type="submit" class="btn-primary">Create Room as Speaker</button>
+              <button type="submit" class="btn-primary create-room-btn">Create Audio Room</button>
             </div>
           </form>
         </div>
@@ -132,7 +125,7 @@
     <div id="listener-action-modal" class="modal hide">
       <div class="modal-content">
         <div class="modal-header">
-          <h3>Listener Actions</h3>
+          <h3>Participant Actions</h3>
           <button class="close-button" data-modal="listener-action-modal">&times;</button>
         </div>
         <div class="modal-body">
@@ -142,9 +135,28 @@
             </div>
             <span id="listener-name" class="listener-name-display">User Name</span>
           </div>
+          
+          <div id="creator-only-message" class="creator-only-message hide">
+            <p>Only the room creator can promote listeners to speakers or demote speakers to listeners.</p>
+          </div>
+          
+          <div class="action-description" id="promote-description">
+            <h4>Invite to speak</h4>
+            <p>Promoting a listener to speaker will allow them to unmute their microphone and speak in the room.</p>
+          </div>
+          
+          <div class="action-description hide" id="demote-description">
+            <h4>Move to listener</h4>
+            <p>Moving a speaker back to listener will prevent them from speaking in the room.</p>
+          </div>
+          
           <div class="action-buttons">
-            <button id="promote-listener" class="btn-primary">Invite to Speak</button>
-            <button id="demote-speaker" class="btn-danger hide">Move to Listeners</button>
+            <button id="promote-listener" class="btn-primary">
+              <span class="btn-icon">🎤</span> Invite to Speak
+            </button>
+            <button id="demote-speaker" class="btn-danger hide">
+              <span class="btn-icon">🔇</span> Move to Listeners
+            </button>
           </div>
         </div>
       </div>

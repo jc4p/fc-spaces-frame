@@ -6,6 +6,9 @@ import {
   selectIsConnectedToRoom,
   selectVideoTrackByID,
   selectLocalPeer,
+  selectIsPeerAudioEnabled,
+  selectAudioTrackByPeerID,
+  selectPeerAudioByID,
 } from "@100mslive/hms-video-store";
 
 // Import the Farcaster Frame SDK
@@ -83,6 +86,15 @@ let selectedPeerId = null;
 
 // store peer IDs already rendered to avoid re-render on mute/unmute
 const renderedPeerIDs = new Set();
+
+// Store speaking states for peer avatars
+const speakingPeers = new Map();
+
+// Timer to update speaking status
+let speakingUpdateInterval;
+
+// Keep track of the room creator's FID
+let roomCreatorFid = null;
 
 // API configuration
 const API_CONFIG = {
@@ -218,7 +230,11 @@ const frameHelpers = {
 
 // Add API helper functions
 const api = {
+  // Note: These endpoints aren't actually documented in SERVER_README.md
+  // These are likely used for debugging only and should be removed in production
+  // or confirmed with the server developer
   async getTemplateInfo() {
+    console.warn('Warning: /template-info endpoint not documented in SERVER_README.md');
     const response = await fetch(`${API_CONFIG.BASE_URL}/template-info`);
     if (!response.ok) {
       const error = await response.json();
@@ -227,7 +243,11 @@ const api = {
     return response.json();
   },
   
+  // Note: This endpoint isn't actually documented in SERVER_README.md
+  // This is likely used for debugging only and should be removed in production
+  // or confirmed with the server developer
   async getRoomInfo(roomId) {
+    console.warn('Warning: /room-info/${roomId} endpoint not documented in SERVER_README.md');
     const response = await fetch(`${API_CONFIG.BASE_URL}/room-info/${roomId}`);
     if (!response.ok) {
       const error = await response.json();
@@ -307,27 +327,7 @@ const api = {
     return response.json();
   },
   
-  // Function to change role of a peer
-  async changeRole(roomId, peerId, role, fid) {
-    // This is a custom endpoint we'll assume exists for role management
-    const response = await fetch(`${API_CONFIG.BASE_URL}/change-role`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ 
-        roomId, 
-        peerId, 
-        role, // 'fariscope-viewer' or 'fariscope-streamer'
-        fid // Host's FID for authorization
-      }),
-    });
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'Failed to change role');
-    }
-    return response.json();
-  },
+  // The role management is handled directly by 100ms SDK (hmsActions.changeRole)
 };
 
 // Update the join button handler to be audio-only for viewers
@@ -413,7 +413,57 @@ joinBtn.onclick = async () => {
 // Leaving the room
 async function leaveRoom() {
   try {
+    // Before leaving, check if the user is the creator of the room
+    const localPeer = hmsStore.getState(selectLocalPeer);
+    
+    // If no local peer, just leave
+    if (!localPeer) {
+      await hmsActions.leave();
+      return;
+    }
+    
+    // Check metadata to see if this user is the creator
+    let isCreator = false;
+    let metadata = {};
+    
+    try {
+      if (localPeer.metadata) {
+        metadata = JSON.parse(localPeer.metadata);
+        isCreator = !!metadata.isCreator;
+      }
+    } catch (e) {
+      console.warn('Failed to parse metadata when leaving:', e);
+    }
+    
+    console.log('Leaving room, isCreator:', isCreator, 'metadata:', metadata);
+    
+    // If user is the creator, offer to disable the room
+    if (isCreator) {
+      // Get required info for disabling the room
+      const roomId = localPeer.roomId;
+      const fid = metadata.fid || window.userFid;
+      const address = metadata.address || document.getElementById("eth-address")?.value;
+      
+      if (roomId && (fid || address)) {
+        // Ask user if they want to end the room for everyone
+        const shouldDisable = confirm('Do you want to end this room for everyone? Click Cancel to leave without ending the room.');
+        
+        if (shouldDisable) {
+          try {
+            console.log('Disabling room with parameters:', { roomId, address, fid });
+            await api.disableRoom(roomId, address, fid);
+            alert('Room ended successfully for everyone.');
+          } catch (disableError) {
+            console.error('Failed to disable room:', disableError);
+            alert('Failed to end the room, but you have been disconnected.');
+          }
+        }
+      }
+    }
+    
+    // Leave the room
     await hmsActions.leave();
+    
     // Clean up room timer
     if (roomDurationInterval) {
       clearInterval(roomDurationInterval);
@@ -425,6 +475,9 @@ async function leaveRoom() {
     form.classList.add("hide");
     conference.classList.add("hide");
     controls.classList.add("hide");
+    
+    // Refresh the rooms list
+    loadRooms();
   } catch (error) {
     console.error('Error leaving room:', error);
   }
@@ -532,12 +585,23 @@ function getDisplayName(peer) {
 
 // Render the speakers list
 function renderSpeakersList(speakers, localPeer) {
+  // Check if current user is room creator - used for special UI
+  const userIsCreator = isRoomCreator();
+  
+  // Add a class to the speakers-list if the user is the creator
+  if (userIsCreator) {
+    speakersList.classList.add('room-creator');
+  } else {
+    speakersList.classList.remove('room-creator');
+  }
+  
   speakersList.innerHTML = speakers.map(speaker => {
     const profile = getProfileFromPeer(speaker);
     const displayName = getDisplayName(speaker);
     const isLocal = speaker.id === localPeer?.id;
     const isMuted = !speaker.audioEnabled;
     const isHost = true; // All speakers are hosts in this app
+    const isSpeaking = speakingPeers.get(speaker.id); // Check if the peer is currently speaking
     
     // Check if we have a profile picture
     const hasPfp = profile && profile.pfpUrl;
@@ -545,14 +609,24 @@ function renderSpeakersList(speakers, localPeer) {
       ? `<img src="${profile.pfpUrl}" alt="${displayName}" />`
       : speaker.name.charAt(0).toUpperCase();
     
+    // Only show mute badge if the speaker is actually muted
+    // For the local user, check if they have mic permissions before showing the mute badge
+    const showMuteBadge = isLocal 
+      ? (isMuted && hasMicrophonePermission) // Only show mute badge for local user if they have mic permissions
+      : isMuted; // For remote users, show based on their actual mute state
+    
+    // Only show interaction hint for non-local peers if user is creator
+    const showInteractionHint = !isLocal && userIsCreator;
+    
     return `
-      <div class="speaker-item" data-peer-id="${speaker.id}" data-role="fariscope-streamer">
-        <div class="avatar${hasPfp ? ' with-image' : ''}">
+      <div class="speaker-item" data-peer-id="${speaker.id}" data-role="fariscope-streamer" title="${userIsCreator && !isLocal ? 'Click to manage this speaker' : ''}">
+        <div class="avatar${hasPfp ? ' with-image' : ''}${isSpeaking ? ' speaking' : ''}">
           ${avatarContent}
           ${isHost ? '<div class="avatar-badge host-badge">★</div>' : ''}
-          ${isMuted ? '<div class="avatar-badge muted-badge">🔇</div>' : ''}
+          ${showMuteBadge ? '<div class="avatar-badge muted-badge">🔇</div>' : ''}
         </div>
         <div class="avatar-name">${displayName}${isLocal ? ' (You)' : ''}</div>
+        ${showInteractionHint ? '<div class="interaction-hint">⚙️</div>' : ''}
       </div>
     `;
   }).join('');
@@ -567,11 +641,22 @@ function renderSpeakersList(speakers, localPeer) {
 
 // Render the listeners list
 function renderListenersList(listeners, localPeer, isHost) {
+  // Check if current user is room creator - used for special UI
+  const userIsCreator = isRoomCreator();
+  
+  // Add a class to the listeners-list if the user is the creator
+  if (userIsCreator) {
+    listenersList.classList.add('room-creator');
+  } else {
+    listenersList.classList.remove('room-creator');
+  }
+  
   listenersList.innerHTML = listeners.map(listener => {
     const profile = getProfileFromPeer(listener);
     const displayName = getDisplayName(listener);
     const isLocal = listener.id === localPeer?.id;
     const isMuted = !listener.audioEnabled;
+    const isSpeaking = speakingPeers.get(listener.id); // Check if the peer is currently speaking
     
     // Check if we have a profile picture
     const hasPfp = profile && profile.pfpUrl;
@@ -579,13 +664,23 @@ function renderListenersList(listeners, localPeer, isHost) {
       ? `<img src="${profile.pfpUrl}" alt="${displayName}" />`
       : listener.name.charAt(0).toUpperCase();
     
+    // Only show mute badge if the listener is actually muted
+    // For the local user, check if they have mic permissions before showing the mute badge
+    const showMuteBadge = isLocal 
+      ? (isMuted && hasMicrophonePermission) // Only show mute badge for local user if they have mic permissions
+      : isMuted; // For remote users, show based on their actual mute state
+    
+    // Only show interaction hint for non-local peers if user is creator
+    const showInteractionHint = !isLocal && userIsCreator;
+    
     return `
-      <div class="listener-item" data-peer-id="${listener.id}" data-role="fariscope-viewer">
-        <div class="avatar listener-avatar${hasPfp ? ' with-image' : ''}">
+      <div class="listener-item" data-peer-id="${listener.id}" data-role="fariscope-viewer" title="${userIsCreator && !isLocal ? 'Click to invite this listener to speak' : ''}">
+        <div class="avatar listener-avatar${hasPfp ? ' with-image' : ''}${isSpeaking ? ' speaking' : ''}">
           ${avatarContent}
-          ${isMuted ? '<div class="avatar-badge muted-badge">🔇</div>' : ''}
+          ${showMuteBadge ? '<div class="avatar-badge muted-badge">🔇</div>' : ''}
         </div>
         <div class="avatar-name">${displayName}${isLocal ? ' (You)' : ''}</div>
+        ${showInteractionHint ? '<div class="interaction-hint">🎤</div>' : ''}
       </div>
     `;
   }).join('');
@@ -606,7 +701,7 @@ function handlePeerClick(e) {
   const peers = hmsStore.getState(selectPeers);
   const localPeer = hmsStore.getState(selectLocalPeer);
   
-  // Only host can manage other peers
+  // Only streamers can see peer details
   if (localPeer?.roleName !== 'fariscope-streamer') return;
   
   // Don't allow actions on self
@@ -639,13 +734,40 @@ function handlePeerClick(e) {
   // Set the name display
   listenerName.textContent = displayName;
   
-  // Show/hide appropriate buttons based on role
+  // Check if the local user is the room creator
+  const userIsCreator = isRoomCreator();
+  
+  // Show explanatory text if user is not a creator but is a streamer
+  const creatorOnlyMessage = document.getElementById('creator-only-message');
+  if (creatorOnlyMessage) {
+    if (!userIsCreator && localPeer?.roleName === 'fariscope-streamer') {
+      creatorOnlyMessage.classList.remove('hide');
+    } else {
+      creatorOnlyMessage.classList.add('hide');
+    }
+  }
+  
+  // Get the description elements
+  const promoteDescription = document.getElementById('promote-description');
+  const demoteDescription = document.getElementById('demote-description');
+  
+  // Show/hide appropriate buttons and descriptions based on role and creator status
   if (role === 'fariscope-viewer') {
-    promoteListenerBtn.classList.remove('hide');
+    // Only room creator can promote to streamer
+    promoteListenerBtn.classList.toggle('hide', !userIsCreator);
     demoteSpeakerBtn.classList.add('hide');
+    
+    // Show/hide appropriate descriptions
+    if (promoteDescription) promoteDescription.classList.toggle('hide', !userIsCreator);
+    if (demoteDescription) demoteDescription.classList.add('hide');
   } else {
     promoteListenerBtn.classList.add('hide');
-    demoteSpeakerBtn.classList.remove('hide');
+    // Only room creator can demote speakers
+    demoteSpeakerBtn.classList.toggle('hide', !userIsCreator);
+    
+    // Show/hide appropriate descriptions
+    if (promoteDescription) promoteDescription.classList.add('hide');
+    if (demoteDescription) demoteDescription.classList.toggle('hide', !userIsCreator);
   }
 }
 
@@ -694,18 +816,119 @@ function updateControlsVisibility() {
   }
 }
 
+// Function to check if the local user is the room creator
+function isRoomCreator() {
+  const localPeer = hmsStore.getState(selectLocalPeer);
+  if (!localPeer || !localPeer.metadata) return false;
+  
+  try {
+    const metadata = JSON.parse(localPeer.metadata);
+    return metadata.isCreator === true;
+  } catch (e) {
+    console.warn('Error checking if user is room creator:', e);
+    return false;
+  }
+}
+
+// Function to update speaking status for peers
+function updateSpeakingStatus() {
+  const peers = hmsStore.getState(selectPeers);
+  
+  peers.forEach(peer => {
+    // Skip peers with no audio track or muted peers
+    if (!peer.audioTrack || !peer.audioEnabled) {
+      speakingPeers.set(peer.id, false);
+      return;
+    }
+    
+    try {
+      // Get audio level for the peer
+      const audioTrack = hmsStore.getState(selectAudioTrackByPeerID(peer.id));
+      
+      if (audioTrack && audioTrack.id) {
+        // Get audio level - value between 0 and 1
+        const audioLevel = hmsStore.getState(selectPeerAudioByID(peer.id)) || 0;
+        
+        // Consider speaking if audio level is above threshold (0.05)
+        const isSpeaking = audioLevel > 0.05;
+        
+        // Update speaking state
+        speakingPeers.set(peer.id, isSpeaking);
+        
+        // Update DOM if needed
+        const peerAvatar = document.querySelector(`[data-peer-id="${peer.id}"] .avatar`);
+        if (peerAvatar) {
+          if (isSpeaking) {
+            peerAvatar.classList.add('speaking');
+          } else {
+            peerAvatar.classList.remove('speaking');
+          }
+        }
+      }
+    } catch (e) {
+      console.warn(`Error checking audio for peer ${peer.id}:`, e);
+    }
+  });
+  
+  // Check for room creator - this helps keep track of who created the room
+  if (!roomCreatorFid) {
+    peers.forEach(peer => {
+      try {
+        if (peer.metadata) {
+          const metadata = JSON.parse(peer.metadata);
+          if (metadata.isCreator === true && metadata.fid) {
+            roomCreatorFid = metadata.fid.toString();
+            console.log(`Room creator identified: FID ${roomCreatorFid}`);
+          }
+        }
+      } catch (e) {
+        // Ignore parsing errors
+      }
+    });
+  }
+}
+
 // Subscribe to role changes
 hmsStore.subscribe(updateControlsVisibility, selectLocalPeer);
 
 // Mute and unmute audio
 muteAudio.onclick = async () => {
-  const audioEnabled = !hmsStore.getState(selectIsLocalAudioEnabled);
-  await hmsActions.setLocalAudioEnabled(audioEnabled);
-  
-  // Update button text
-  const muteText = muteAudio.querySelector('span');
-  if (muteText) {
-    muteText.textContent = audioEnabled ? "Mute" : "Unmute";
+  try {
+    // First check if we have permissions
+    if (!hasMicrophonePermission) {
+      hasMicrophonePermission = await checkMicrophonePermission();
+    }
+    
+    // If we still don't have permissions, ask for them
+    if (!hasMicrophonePermission) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        if (stream) {
+          stream.getTracks().forEach(track => track.stop());
+          hasMicrophonePermission = true;
+        }
+      } catch (err) {
+        console.warn('Microphone permission request failed:', err);
+        alert('Please allow microphone access to unmute yourself.');
+        return;
+      }
+    }
+    
+    // Toggle audio state
+    const audioEnabled = !hmsStore.getState(selectIsLocalAudioEnabled);
+    await hmsActions.setLocalAudioEnabled(audioEnabled);
+    
+    // Update button text
+    const muteText = muteAudio.querySelector('span');
+    if (muteText) {
+      muteText.textContent = audioEnabled ? "Mute" : "Unmute";
+    }
+    
+    // Force refresh the UI to update mute badges
+    renderPeers();
+  } catch (error) {
+    console.error('Error toggling audio:', error);
+    alert('Failed to change audio state. Please try again.');
   }
 };
 
@@ -815,20 +1038,29 @@ if (promoteListenerBtn) {
     if (!selectedPeerId) return;
     
     const localPeer = hmsStore.getState(selectLocalPeer);
-    if (localPeer?.roleName !== 'fariscope-streamer') return;
+    
+    // Verify user is a streamer
+    if (localPeer?.roleName !== 'fariscope-streamer') {
+      alert('Only streamers can manage participants');
+      return;
+    }
+    
+    // Verify user is the room creator
+    if (!isRoomCreator()) {
+      alert('Only the room creator can promote listeners to speakers');
+      return;
+    }
     
     try {
-      // Call the API to change the role
-      await api.changeRole(
-        localPeer.roomId,
-        selectedPeerId,
-        'fariscope-streamer',
-        window.userFid || localPeer.name.split('FID:')[1]
-      );
+      // Use the 100ms SDK to change role directly
+      await hmsActions.changeRoleOfPeer(selectedPeerId, 'fariscope-streamer', true);
       
       // Close the modal
       listenerActionModal.classList.add('hide');
       selectedPeerId = null;
+      
+      // Show success message
+      alert('Successfully promoted to speaker! They can now talk in the room.');
       
     } catch (error) {
       console.error('Failed to promote listener:', error);
@@ -843,20 +1075,29 @@ if (demoteSpeakerBtn) {
     if (!selectedPeerId) return;
     
     const localPeer = hmsStore.getState(selectLocalPeer);
-    if (localPeer?.roleName !== 'fariscope-streamer') return;
+    
+    // Verify user is a streamer
+    if (localPeer?.roleName !== 'fariscope-streamer') {
+      alert('Only streamers can manage participants');
+      return;
+    }
+    
+    // Verify user is the room creator
+    if (!isRoomCreator()) {
+      alert('Only the room creator can demote speakers to listeners');
+      return;
+    }
     
     try {
-      // Call the API to change the role
-      await api.changeRole(
-        localPeer.roomId, 
-        selectedPeerId,
-        'fariscope-viewer',
-        window.userFid || localPeer.name.split('FID:')[1]
-      );
+      // Use the 100ms SDK to change role directly
+      await hmsActions.changeRoleOfPeer(selectedPeerId, 'fariscope-viewer', true);
       
       // Close the modal
       listenerActionModal.classList.add('hide');
       selectedPeerId = null;
+      
+      // Show success message
+      alert('Successfully moved back to listener. They can no longer speak in the room.');
       
     } catch (error) {
       console.error('Failed to demote speaker:', error);
@@ -892,6 +1133,11 @@ function onConnection(isConnected) {
       controls.classList.remove("hide");
       hostControls.classList.add("hide");
     }
+    
+    // Start the speaking detection interval
+    if (!speakingUpdateInterval) {
+      speakingUpdateInterval = setInterval(updateSpeakingStatus, 500);
+    }
   } else {
     // Clean up room timer
     if (roomDurationInterval) {
@@ -899,8 +1145,17 @@ function onConnection(isConnected) {
       roomStartTime = null;
     }
     
+    // Stop the speaking detection interval
+    if (speakingUpdateInterval) {
+      clearInterval(speakingUpdateInterval);
+      speakingUpdateInterval = null;
+    }
+    
     // Reset selected peer
     selectedPeerId = null;
+    
+    // Clear speaking state
+    speakingPeers.clear();
     
     // Show room list
     roomsList.classList.remove("hide");
@@ -949,7 +1204,10 @@ hmsStore.subscribe((isConnected) => {
 
 // Close listener action modal when clicking close button
 document.querySelectorAll('.close-button').forEach(button => {
-  button.onclick = () => {
+  button.onclick = (event) => {
+    // Make sure we stop event propagation to prevent other handlers from firing
+    event.stopPropagation();
+    
     const modalId = button.dataset.modal;
     if (modalId) {
       document.getElementById(modalId).classList.add('hide');
@@ -1101,7 +1359,9 @@ async function directJoinRoom(event) {
       })
     });
     
-    // Debug: Get room info from server after joining
+    // Note: This debug call uses an endpoint that doesn't exist in SERVER_README.md
+    // Commenting it out since it's for debugging only and the endpoint may not exist
+    /*
     try {
       setTimeout(async () => {
         const roomInfo = await api.getRoomInfo(roomId);
@@ -1110,6 +1370,7 @@ async function directJoinRoom(event) {
     } catch (e) {
       console.warn('Failed to get room info:', e);
     }
+    */
   } catch (error) {
     console.error('Failed to join room:', error);
     alert('Failed to join room: ' + error.message);
@@ -1225,6 +1486,7 @@ createRoomForm.onsubmit = async (e) => {
   // If no FID is available, we can't create a room
   if (!fid) {
     console.error('No Farcaster ID available. Please connect via Farcaster Frame.');
+    alert('Please connect your Farcaster account first.');
     return;
   }
   
@@ -1234,15 +1496,43 @@ createRoomForm.onsubmit = async (e) => {
       address = await frameHelpers.getWalletAddress();
       if (!address) {
         console.error('No wallet address available');
+        alert('Please connect your wallet first.');
         return;
       }
     } catch (error) {
       console.error('Failed to get wallet address:', error);
+      alert('Failed to get wallet address. Please try again.');
       return;
     }
   }
   
   try {
+    // Check if the user already has an active room
+    const { data: rooms } = await api.listRooms();
+    
+    // Look for an active room where either the FID or ETH address matches
+    const existingRoom = rooms.find(room => {
+      const roomFid = room.metadata?.fid?.toString();
+      const roomAddress = room.metadata?.address?.toLowerCase();
+      const fidMatches = roomFid && fid && roomFid === fid.toString();
+      const addressMatches = roomAddress && address && roomAddress === address.toString().toLowerCase();
+      return fidMatches || addressMatches;
+    });
+    
+    if (existingRoom) {
+      alert('You already have an active room. Please join your existing room or end it before creating a new one.');
+      createRoomModal.classList.add('hide');
+      // Auto-join the existing room
+      const roomItem = document.querySelector(`[data-room-id="${existingRoom.id}"]`);
+      if (roomItem) {
+        const joinButton = roomItem.querySelector('.join-room-btn');
+        if (joinButton) {
+          joinButton.click();
+        }
+      }
+      return;
+    }
+    
     const { code, roomId } = await api.createRoom(address, fid);
     createRoomModal.classList.add('hide');
     
@@ -1287,6 +1577,7 @@ createRoomForm.onsubmit = async (e) => {
       metaData: JSON.stringify({
         fid: fid,
         isCreator: true, // Mark as room creator
+        address: address, // Include address in metadata for room ownership verification
         profile: userProfile ? {
           username: userProfile.username,
           displayName: userProfile.displayName,
@@ -1317,15 +1608,13 @@ createRoomBtn.onclick = async () => {
   const frameStatus = document.getElementById('frame-status');
   const statusIndicator = frameStatus.querySelector('.status-indicator');
   const statusText = frameStatus.querySelector('.status-text');
-  const frameInfo = document.getElementById('frame-info');
   const frameNotConnected = document.getElementById('frame-not-connected');
   const createRoomActions = document.getElementById('create-room-actions');
   
   statusIndicator.className = 'status-indicator';
   statusText.textContent = 'Checking Farcaster connection...';
   
-  // Hide info and error sections initially
-  frameInfo.classList.add('hide');
+  // Hide error section initially
   frameNotConnected.classList.add('hide');
   
   try {
@@ -1354,11 +1643,6 @@ createRoomBtn.onclick = async () => {
       if (address) {
         document.getElementById('eth-address').value = address;
       }
-      
-      // Show info section
-      frameInfo.classList.remove('hide');
-      document.getElementById('info-fid').textContent = fid;
-      document.getElementById('info-wallet').textContent = address || 'Not connected';
       
       // Enable create button
       createRoomActions.classList.remove('hide');
@@ -1401,6 +1685,12 @@ setInterval(loadRooms, 30000); // Every 30 seconds
 // Subscribe to peer updates
 hmsStore.subscribe(renderPeers, selectPeers);
 
+// Also specifically listen for audio status changes to update mute badges
+hmsStore.subscribe(() => {
+  // Audio status changed, re-render peers to update mute badges
+  renderPeers();
+}, selectIsLocalAudioEnabled);
+
 // Add debug logging for peer updates
 hmsStore.subscribe((peers) => {
   console.log('Peers update:', peers);
@@ -1409,7 +1699,8 @@ hmsStore.subscribe((peers) => {
       role: peer.roleName,
       isLocal: peer.isLocal,
       videoTrack: peer.videoTrack,
-      audioTrack: peer.audioTrack
+      audioTrack: peer.audioTrack,
+      audioEnabled: peer.audioEnabled
     });
   });
 }, selectPeers);
@@ -1450,13 +1741,16 @@ hmsStore.subscribe((localPeer) => {
 // Initialize the app when DOM is ready
 document.addEventListener('DOMContentLoaded', async () => {
   try {
-    // Fetch template info for debugging
+    // Note: This debug call uses an endpoint that doesn't exist in SERVER_README.md
+    // Commenting it out since it's for debugging only and the endpoint may not exist
+    /*
     try {
       const templateInfo = await api.getTemplateInfo();
       console.log('100ms Template Info:', templateInfo);
     } catch (e) {
       console.warn('Failed to fetch template info:', e);
     }
+    */
     
     // Check for microphone permission early
     hasMicrophonePermission = await checkMicrophonePermission();

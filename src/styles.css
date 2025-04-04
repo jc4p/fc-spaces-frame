@@ -262,11 +262,56 @@ form h2,
   cursor: pointer;
   padding: 8px;
   border-radius: 12px;
-  transition: background-color 0.2s;
+  transition: all 0.2s ease;
+  position: relative;
 }
 
 .speaker-item:hover, .listener-item:hover {
-  background-color: rgba(255, 255, 255, 0.05);
+  background-color: rgba(255, 255, 255, 0.1);
+  transform: translateY(-2px);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.2);
+}
+
+.speaker-item::after, .listener-item::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  border-radius: 12px;
+  border: 2px dashed transparent;
+  pointer-events: none;
+  transition: all 0.3s ease;
+}
+
+.room-creator .speaker-item:hover::after, .room-creator .listener-item:hover::after {
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.interaction-hint {
+  position: absolute;
+  bottom: -8px;
+  right: -8px;
+  background-color: var(--accent-color);
+  color: white;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  opacity: 0;
+  transform: scale(0.8);
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+}
+
+.room-creator .speaker-item:hover .interaction-hint,
+.room-creator .listener-item:hover .interaction-hint {
+  opacity: 1;
+  transform: scale(1);
 }
 
 .avatar {
@@ -283,12 +328,33 @@ form h2,
   margin-bottom: 8px;
   position: relative;
   overflow: hidden;
+  border: 2px solid transparent;
+  transition: border-color 0.3s ease;
 }
 
 .avatar.with-image img {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+/* Speaking indicator styles */
+.avatar.speaking {
+  border-color: #4caf50;
+  box-shadow: 0 0 0 2px rgba(76, 175, 80, 0.3);
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(76, 175, 80, 0.7);
+  }
+  70% {
+    box-shadow: 0 0 0 6px rgba(76, 175, 80, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(76, 175, 80, 0);
+  }
 }
 
 .listener-avatar {
@@ -414,10 +480,55 @@ form h2,
   font-weight: 600;
 }
 
+.creator-only-message {
+  background-color: rgba(255, 193, 7, 0.15);
+  border-left: 3px solid rgba(255, 193, 7, 0.7);
+  padding: 12px;
+  margin: 16px 0;
+  border-radius: 4px;
+}
+
+.creator-only-message p {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.action-description {
+  margin: 16px 0;
+}
+
+.action-description h4 {
+  font-size: 16px;
+  margin-bottom: 8px;
+  color: var(--text-color);
+}
+
+.action-description p {
+  color: var(--secondary-text);
+  font-size: 14px;
+  line-height: 1.5;
+  margin: 0;
+}
+
 .action-buttons {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  margin-top: 20px;
+}
+
+.action-buttons button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px !important;
+}
+
+.btn-icon {
+  margin-right: 8px;
+  font-size: 16px;
 }
 
 .action-buttons button {
@@ -585,6 +696,48 @@ input.error {
   justify-content: center;
 }
 
+.modal-content {
+  background: var(--surface-color);
+  border-radius: 12px;
+  width: 90%;
+  max-width: 450px;
+  box-shadow: 0 5px 20px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.modal-header h3 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.close-button {
+  background: transparent;
+  border: none;
+  color: var(--secondary-text);
+  font-size: 24px;
+  cursor: pointer;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: all 0.2s ease;
+}
+
+.close-button:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+  color: var(--text-color);
+}
+
 .modal-body {
   padding: 20px;
 }
@@ -708,6 +861,26 @@ label {
   color: rgba(255, 255, 255, 0.8);
 }
 
+.create-room-description {
+  margin: 20px 0;
+  color: var(--secondary-text);
+  line-height: 1.5;
+  font-size: 15px;
+}
+
 .create-room-actions {
   margin-top: 20px;
+}
+
+.create-room-btn {
+  width: 100%;
+  padding: 12px !important;
+  font-size: 16px !important;
+  border-radius: 24px !important;
+  background-color: var(--accent-color) !important;
+  transition: all 0.2s ease;
+}
+
+.create-room-btn:hover {
+  background-color: #6340d9 !important;
 }
