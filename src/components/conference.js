@@ -255,60 +255,7 @@ class Conference {
     // Subscribe to connection state
     hmsService.store.subscribe(this.handleConnectionChange.bind(this), selectIsConnectedToRoom);
     
-    // Add mutation observer to ensure click handlers are attached to new participants
-    this.setupDOMObservers();
-  }
-  
-  /**
-   * Set up DOM observers to handle dynamic content changes
-   */
-  setupDOMObservers() {
-    // Create observer for listeners list to attach click handlers when new participants join
-    if (this.participantObserver) {
-      this.participantObserver.disconnect();
-    }
-    
-    this.participantObserver = new MutationObserver((mutations) => {
-      // Check if we need to attach click handlers
-      if (mutations.some(mutation => mutation.type === 'childList')) {
-        // Check if user is the room creator - only attach click handlers if they are
-        const isCreator = hmsService.isRoomCreator();
-        if (isCreator) {
-          // Small delay to ensure DOM is fully updated
-          setTimeout(() => {
-            // Only attach click handlers to NEW elements that don't already have them
-            // For speakers
-            document.querySelectorAll('.speaker-item:not([data-has-click])').forEach(item => {
-              item.addEventListener('click', this.handlePeerClick.bind(this));
-              // Mark that this element has a click handler
-              item.setAttribute('data-has-click', 'true');
-            });
-            
-            // For listeners
-            document.querySelectorAll('.listener-item:not([data-has-click])').forEach(item => {
-              item.addEventListener('click', this.handlePeerClick.bind(this));
-              // Mark that this element has a click handler
-              item.setAttribute('data-has-click', 'true');
-            });
-          }, 100);
-        }
-      }
-    });
-    
-    // Observe both speakers and listeners lists
-    if (this.speakersList) {
-      this.participantObserver.observe(this.speakersList, {
-        childList: true,
-        subtree: false
-      });
-    }
-    
-    if (this.listenersList) {
-      this.participantObserver.observe(this.listenersList, {
-        childList: true,
-        subtree: false
-      });
-    }
+    // No need for DOM observers - the HMS store subscription will handle updates
   }
   
   /**
@@ -503,9 +450,6 @@ class Conference {
           this.listenersList.scrollTop = 1;
           this.listenersList.scrollTop = 0;
         }
-        
-        // Set up DOM observers to catch new participants
-        this.setupDOMObservers();
       }, 300);
       
       // If we're on iOS, try to unlock audio again
@@ -519,11 +463,6 @@ class Conference {
       // Clear the room ID when disconnecting
       console.log('Connection: Clearing currentRoomId (was:', this.currentRoomId, ')');
       this.currentRoomId = null;
-      
-      // Disconnect any DOM observers
-      if (this.participantObserver) {
-        this.participantObserver.disconnect();
-      }
       
       // Hide conference UI
       if (this.conferenceEl) this.conferenceEl.classList.add("hide");
@@ -846,9 +785,6 @@ class Conference {
         isCreator = true;
       }
       
-      // Add a data attribute to identify creators for click handling
-      const creatorAttr = isCreator ? 'data-is-creator="true"' : '';
-      
       // Check if we have a profile picture
       let hasPfp = false;
       let pfpUrl = '';
@@ -882,7 +818,7 @@ class Conference {
       const hostBadgeClass = isCreator ? 'host-badge creator-badge' : 'host-badge';
       
       return `
-        <div class="speaker-item" data-peer-id="${speaker.id}" data-role="${speaker.roleName || speaker.role || HMS_ROLES.STREAMER}" ${creatorAttr} title="${userIsCreator && !isLocal ? 'Click to manage this speaker' : ''}">
+        <div class="speaker-item" data-peer-id="${speaker.id}" data-role="${speaker.roleName || speaker.role || HMS_ROLES.STREAMER}" title="${userIsCreator && !isLocal ? 'Click to manage this speaker' : ''}">
           <div class="${avatarClasses}">
             ${avatarContent}
             ${isHost ? `<div class="avatar-badge ${hostBadgeClass}">${hostBadgeContent}</div>` : ''}
@@ -894,17 +830,13 @@ class Conference {
       `;
     }).join('');
     
-    // Add click handlers for speaker items if local user is host
-    if (localPeer?.roleName === HMS_ROLES.STREAMER || localPeer?.role === HMS_ROLES.STREAMER) {
+    // Only add click handlers if user is the room creator
+    if (userIsCreator) {
       document.querySelectorAll('.speaker-item').forEach(item => {
         item.addEventListener('click', this.handlePeerClick.bind(this));
-        // Mark that this element has a click handler
-        item.setAttribute('data-has-click', 'true');
       });
-    }
-    
-    // Add avatar click handlers for profile viewing ONLY IF the local user is NOT a creator
-    if (!userIsCreator) {
+    } else {
+      // For non-creators, add profile view click handlers
       document.querySelectorAll('.speaker-item .avatar').forEach(avatar => {
         avatar.addEventListener('click', this.handleAvatarClick.bind(this));
       });
@@ -950,25 +882,6 @@ class Conference {
       const isSpeaking = listener.isSpeaking || hmsService.isPeerSpeaking(listener.id);
       const isHandRaised = hmsService.isPeerHandRaised(listener.id);
       
-      // Check if this speaker is the room creator
-      let isCreator = false;
-      try {
-        if (listener.metadata) {
-          const metadata = typeof listener.metadata === 'string' ? JSON.parse(listener.metadata) : listener.metadata;
-          isCreator = metadata.isCreator === true;
-        }
-      } catch (e) {
-        console.warn('Error parsing peer metadata:', e);
-      }
-      
-      // Also check if this is the local peer and we know we're the creator
-      if (isLocal && userIsCreator) {
-        isCreator = true;
-      }
-      
-      // Add a data attribute to identify creators for click handling
-      const creatorAttr = isCreator ? 'data-is-creator="true"' : '';
-      
       // Check if we have a profile picture
       let hasPfp = false;
       let pfpUrl = '';
@@ -1004,7 +917,7 @@ class Conference {
       ].filter(Boolean).join(' ');
       
       return `
-        <div class="listener-item" data-peer-id="${listener.id}" data-role="${listener.roleName || listener.role || HMS_ROLES.VIEWER}" ${creatorAttr} title="${userIsCreator && !isLocal ? 'Click to invite this listener to speak' : ''}">
+        <div class="listener-item" data-peer-id="${listener.id}" data-role="${listener.roleName || listener.role || HMS_ROLES.VIEWER}" title="${userIsCreator && !isLocal ? 'Click to invite this listener to speak' : ''}">
           <div class="${avatarClasses}">
             ${avatarContent}
             ${showMuteBadge ? '<div class="avatar-badge muted-badge">🔇</div>' : ''}
@@ -1016,17 +929,13 @@ class Conference {
       `;
     }).join('');
     
-    // Add click handlers for listener items if local user is host
-    if (isHost) {
+    // Only add click handlers if user is the room creator
+    if (userIsCreator) {
       document.querySelectorAll('.listener-item').forEach(item => {
         item.addEventListener('click', this.handlePeerClick.bind(this));
-        // Mark that this element has a click handler
-        item.setAttribute('data-has-click', 'true');
       });
-    }
-    
-    // Add avatar click handlers for profile viewing ONLY IF the local user is NOT a creator
-    if (!userIsCreator) {
+    } else {
+      // For non-creators, add profile view click handlers
       document.querySelectorAll('.listener-item .avatar').forEach(avatar => {
         avatar.addEventListener('click', this.handleAvatarClick.bind(this));
       });
@@ -1069,9 +978,11 @@ class Conference {
    * @param {Event} e - Click event
    */
   handlePeerClick(e) {
+    // Only proceed if we are the room creator
+    if (!hmsService.isRoomCreator()) return;
+    
     // Don't process if the click was directly on an avatar
     if (e.target.closest('.avatar')) {
-      // Let the avatar click handler take care of this
       return;
     }
     
@@ -1080,9 +991,6 @@ class Conference {
     const role = peerItem.dataset.role;
     const peers = hmsService.getPeers();
     const localPeer = hmsService.getLocalPeer();
-    
-    // Only streamers can see peer details
-    if (localPeer?.roleName !== HMS_ROLES.STREAMER && localPeer?.role !== HMS_ROLES.STREAMER) return;
     
     // Don't allow actions on self
     if (peerId === localPeer?.id) return;
@@ -1098,80 +1006,44 @@ class Conference {
     const profile = userService.getProfileFromPeer(peer);
     const displayName = userService.getDisplayName(peer);
     
-    // Make sure the modal is initially hidden (to reset its state)
-    this.listenerActionModal.classList.add('hide');
+    // Show action modal
+    this.listenerActionModal.classList.remove('hide');
+      
+    // Update the avatar in the modal
+    const listenerAvatar = document.querySelector('.listener-avatar');
+    if (profile && profile.pfpUrl) {
+      listenerAvatar.innerHTML = `<img src="${profile.pfpUrl}" alt="${displayName}" />`;
+      listenerAvatar.classList.add('with-image');
+    } else {
+      this.listenerInitial.textContent = peer.name.charAt(0).toUpperCase();
+      listenerAvatar.classList.remove('with-image');
+    }
     
-    // Force a small delay before showing it again (helps with reappearance issues)
-    setTimeout(() => {
-      // Show appropriate action modal based on role
-      this.listenerActionModal.classList.remove('hide');
+    // Set the name display
+    this.listenerName.textContent = displayName;
+    
+    // Get the description elements
+    const promoteDescription = document.getElementById('promote-description');
+    const demoteDescription = document.getElementById('demote-description');
+    
+    // Show/hide appropriate buttons and descriptions based on role
+    if (role === HMS_ROLES.VIEWER) {
+      // Viewer can be promoted to speaker
+      this.promoteListenerBtn.classList.remove('hide');
+      this.demoteSpeakerBtn.classList.add('hide');
       
-      // Update the avatar in the modal
-      const listenerAvatar = document.querySelector('.listener-avatar');
-      if (profile && profile.pfpUrl) {
-        listenerAvatar.innerHTML = `<img src="${profile.pfpUrl}" alt="${displayName}" />`;
-        listenerAvatar.classList.add('with-image');
-      } else {
-        this.listenerInitial.textContent = peer.name.charAt(0).toUpperCase();
-        listenerAvatar.classList.remove('with-image');
-      }
+      // Show/hide appropriate descriptions
+      if (promoteDescription) promoteDescription.classList.remove('hide');
+      if (demoteDescription) demoteDescription.classList.add('hide');
+    } else {
+      // Speaker can be demoted to viewer
+      this.promoteListenerBtn.classList.add('hide');
+      this.demoteSpeakerBtn.classList.remove('hide');
       
-      // Set the name display
-      this.listenerName.textContent = displayName;
-      
-      // Check if the local user is the room creator
-      const userIsCreator = hmsService.isRoomCreator();
-      
-      // Show explanatory text if user is not a creator but is a streamer
-      const creatorOnlyMessage = document.getElementById('creator-only-message');
-      if (creatorOnlyMessage) {
-        if (!userIsCreator && (localPeer?.roleName === HMS_ROLES.STREAMER || localPeer?.role === HMS_ROLES.STREAMER)) {
-          creatorOnlyMessage.classList.remove('hide');
-        } else {
-          creatorOnlyMessage.classList.add('hide');
-        }
-      }
-      
-      // Get the description elements
-      const promoteDescription = document.getElementById('promote-description');
-      const demoteDescription = document.getElementById('demote-description');
-      
-      // Show/hide appropriate buttons and descriptions based on role and creator status
-      if (role === HMS_ROLES.VIEWER) {
-        // Only room creator can promote to streamer
-        this.promoteListenerBtn.classList.toggle('hide', !userIsCreator);
-        this.demoteSpeakerBtn.classList.add('hide');
-        
-        // Show/hide appropriate descriptions
-        if (promoteDescription) promoteDescription.classList.toggle('hide', !userIsCreator);
-        if (demoteDescription) demoteDescription.classList.add('hide');
-      } else {
-        this.promoteListenerBtn.classList.add('hide');
-        // Only room creator can demote speakers
-        this.demoteSpeakerBtn.classList.toggle('hide', !userIsCreator);
-        
-        // Show/hide appropriate descriptions
-        if (promoteDescription) promoteDescription.classList.add('hide');
-        if (demoteDescription) demoteDescription.classList.toggle('hide', !userIsCreator);
-      }
-      
-      // Add click-outside listener to close the modal
-      const closeModalOnOutsideClick = (event) => {
-        // Check if the click was outside the modal content
-        if (!event.target.closest('.modal-content') && event.target.classList.contains('modal')) {
-          this.listenerActionModal.classList.add('hide');
-          document.removeEventListener('click', closeModalOnOutsideClick);
-        }
-      };
-      
-      // Remove any existing click-outside listeners to prevent duplicates
-      document.removeEventListener('click', closeModalOnOutsideClick);
-      
-      // Use setTimeout to avoid the current click triggering the handler
-      setTimeout(() => {
-        document.addEventListener('click', closeModalOnOutsideClick);
-      }, 10);
-    }, 50);
+      // Show/hide appropriate descriptions
+      if (promoteDescription) promoteDescription.classList.add('hide');
+      if (demoteDescription) demoteDescription.classList.remove('hide');
+    }
   }
   
   /**

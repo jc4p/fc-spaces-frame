@@ -491,7 +491,7 @@ class RoomsList {
       }, 500);
       
       // Show success message
-      showSuccessMessage('Room created successfully! You are now speaking.');
+      showSuccessMessage('Room created successfully! Unmute yourself to start speaking.');
       
       // Add a hidden input for expected role
       const expectedRoleInput = document.getElementById('expected-role') || 
