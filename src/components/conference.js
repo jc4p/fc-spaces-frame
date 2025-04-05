@@ -623,6 +623,7 @@ class Conference {
       this.hostControls.classList.remove('hide');
       this.viewerControls.classList.add('hide');
     } else {
+      this.controls.classList.remove('hide');
       this.viewerControls.classList.remove('hide');
       this.hostControls.classList.add('hide');
     }
