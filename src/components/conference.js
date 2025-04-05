@@ -783,6 +783,9 @@ class Conference {
         isCreator = true;
       }
       
+      // Add a data attribute to identify creators for click handling
+      const creatorAttr = isCreator ? 'data-is-creator="true"' : '';
+      
       // Check if we have a profile picture
       let hasPfp = false;
       let pfpUrl = '';
@@ -816,7 +819,7 @@ class Conference {
       const hostBadgeClass = isCreator ? 'host-badge creator-badge' : 'host-badge';
       
       return `
-        <div class="speaker-item" data-peer-id="${speaker.id}" data-role="${speaker.roleName || speaker.role || HMS_ROLES.STREAMER}" title="${userIsCreator && !isLocal ? 'Click to manage this speaker' : ''}">
+        <div class="speaker-item" data-peer-id="${speaker.id}" data-role="${speaker.roleName || speaker.role || HMS_ROLES.STREAMER}" ${creatorAttr} title="${userIsCreator && !isLocal ? 'Click to manage this speaker' : ''}">
           <div class="${avatarClasses}">
             ${avatarContent}
             ${isHost ? `<div class="avatar-badge ${hostBadgeClass}">${hostBadgeContent}</div>` : ''}
@@ -835,8 +838,8 @@ class Conference {
       });
     }
     
-    // Add avatar click handlers for all users - enable profile viewing for everyone
-    document.querySelectorAll('.speaker-item .avatar').forEach(avatar => {
+    // Add avatar click handlers ONLY for non-creator avatars
+    document.querySelectorAll('.speaker-item:not([data-is-creator="true"]) .avatar').forEach(avatar => {
       avatar.addEventListener('click', this.handleAvatarClick.bind(this));
     });
   }
@@ -880,6 +883,25 @@ class Conference {
       const isSpeaking = listener.isSpeaking || hmsService.isPeerSpeaking(listener.id);
       const isHandRaised = hmsService.isPeerHandRaised(listener.id);
       
+      // Check if this speaker is the room creator
+      let isCreator = false;
+      try {
+        if (listener.metadata) {
+          const metadata = typeof listener.metadata === 'string' ? JSON.parse(listener.metadata) : listener.metadata;
+          isCreator = metadata.isCreator === true;
+        }
+      } catch (e) {
+        console.warn('Error parsing peer metadata:', e);
+      }
+      
+      // Also check if this is the local peer and we know we're the creator
+      if (isLocal && userIsCreator) {
+        isCreator = true;
+      }
+      
+      // Add a data attribute to identify creators for click handling
+      const creatorAttr = isCreator ? 'data-is-creator="true"' : '';
+      
       // Check if we have a profile picture
       let hasPfp = false;
       let pfpUrl = '';
@@ -915,7 +937,7 @@ class Conference {
       ].filter(Boolean).join(' ');
       
       return `
-        <div class="listener-item" data-peer-id="${listener.id}" data-role="${listener.roleName || listener.role || HMS_ROLES.VIEWER}" title="${userIsCreator && !isLocal ? 'Click to invite this listener to speak' : ''}">
+        <div class="listener-item" data-peer-id="${listener.id}" data-role="${listener.roleName || listener.role || HMS_ROLES.VIEWER}" ${creatorAttr} title="${userIsCreator && !isLocal ? 'Click to invite this listener to speak' : ''}">
           <div class="${avatarClasses}">
             ${avatarContent}
             ${showMuteBadge ? '<div class="avatar-badge muted-badge">🔇</div>' : ''}
@@ -934,8 +956,8 @@ class Conference {
       });
     }
     
-    // Add avatar click handlers for all users - enable profile viewing for everyone
-    document.querySelectorAll('.listener-item .avatar').forEach(avatar => {
+    // Add avatar click handlers ONLY for non-creator avatars
+    document.querySelectorAll('.listener-item:not([data-is-creator="true"]) .avatar').forEach(avatar => {
       avatar.addEventListener('click', this.handleAvatarClick.bind(this));
     });
   }
@@ -1443,7 +1465,7 @@ class Conference {
     senderContainer.dataset.removalTimeout = removalTimeout;
     
     // Create batch of emojis for the reaction
-    const count = Math.floor(Math.random() * 6) + 6; // 6-11 emojis
+    const count = Math.floor(Math.random() * 6) + 8; // 8-13 emojis
     
     // Create and add all elements immediately but with different animation delays
     // This ensures smoother animations by avoiding setTimeout inaccuracies
