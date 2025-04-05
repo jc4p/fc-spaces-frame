@@ -976,23 +976,6 @@ class Conference {
     const peer = peers.find(p => p.id === peerId);
     if (!peer) return;
     
-    // Check if this is a room creator - don't open profile view for creators
-    // as it conflicts with mute/unmute functionality
-    let isCreator = false;
-    try {
-      if (peer.metadata) {
-        const metadata = typeof peer.metadata === 'string' ? JSON.parse(peer.metadata) : peer.metadata;
-        isCreator = metadata.isCreator === true;
-      }
-    } catch (error) {
-      console.error("Error parsing metadata:", error);
-    }
-
-    if (isCreator) {
-      console.log("Skipping profile view b/c they're the room creator");
-      return;
-    }
-    
     // Try to get profile information to find FID
     try {
       if (peer.metadata) {
