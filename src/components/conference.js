@@ -816,7 +816,7 @@ class Conference {
       const hostBadgeClass = isCreator ? 'host-badge creator-badge' : 'host-badge';
       
       return `
-        <div class="speaker-item" data-peer-id="${speaker.id}" data-role="${speaker.roleName || speaker.role || HMS_ROLES.STREAMER}" ${creatorAttr} title="${userIsCreator && !isLocal ? 'Click to manage this speaker' : ''}">
+        <div class="speaker-item" data-peer-id="${speaker.id}" data-role="${speaker.roleName || speaker.role || HMS_ROLES.STREAMER}" title="${userIsCreator && !isLocal ? 'Click to manage this speaker' : ''}">
           <div class="${avatarClasses}">
             ${avatarContent}
             ${isHost ? `<div class="avatar-badge ${hostBadgeClass}">${hostBadgeContent}</div>` : ''}
@@ -896,10 +896,7 @@ class Conference {
       if (isLocal && userIsCreator) {
         isCreator = true;
       }
-      
-      // Add a data attribute to identify creators for click handling
-      const creatorAttr = isCreator ? 'data-is-creator="true"' : '';
-      
+            
       // Check if we have a profile picture
       let hasPfp = false;
       let pfpUrl = '';
@@ -935,7 +932,7 @@ class Conference {
       ].filter(Boolean).join(' ');
       
       return `
-        <div class="listener-item" data-peer-id="${listener.id}" data-role="${listener.roleName || listener.role || HMS_ROLES.VIEWER}" ${creatorAttr} title="${userIsCreator && !isLocal ? 'Click to invite this listener to speak' : ''}">
+        <div class="listener-item" data-peer-id="${listener.id}" data-role="${listener.roleName || listener.role || HMS_ROLES.VIEWER}" title="${userIsCreator && !isLocal ? 'Click to invite this listener to speak' : ''}">
           <div class="${avatarClasses}">
             ${avatarContent}
             ${showMuteBadge ? '<div class="avatar-badge muted-badge">🔇</div>' : ''}
@@ -1415,17 +1412,23 @@ class Conference {
   handleEmojiReaction(event) {
     const { emoji, senderId, senderName } = event.detail;
     
-    // Generate a unique reaction ID that combines the sender and timestamp
-    // This ensures every reaction gets its own container with a unique position
-    const reactionId = `${senderId || 'unknown'}_${Date.now()}`;
-    const reactionClass = `reaction-${reactionId}`;
+    // First, remove any existing containers from this sender
+    const existingContainers = document.querySelectorAll(`.reaction-container[data-sender-id="${senderId}"]`);
+    existingContainers.forEach(container => {
+      // Clear any pending timeouts
+      if (container.dataset.removalTimeout) {
+        clearTimeout(parseInt(container.dataset.removalTimeout));
+      }
+      container.remove();
+    });
     
-    // Always create a new container for each reaction
+    // Create a new container with a random position
+    const randomId = Date.now().toString();
     const senderContainer = document.createElement('div');
-    senderContainer.className = `reaction-container ${reactionClass}`;
+    senderContainer.className = `reaction-container`;
+    senderContainer.dataset.senderId = senderId || 'unknown';
     
     // Position container randomly along the width of the page
-    // This ensures every batch of emojis appears at a different position
     const randomPosition = Math.floor(Math.random() * 85); // 0-85% across the width
     
     senderContainer.style.position = 'absolute';
@@ -1451,7 +1454,6 @@ class Conference {
     const count = Math.floor(Math.random() * 6) + 8; // 8-13 emojis
     
     // Create and add all elements immediately but with different animation delays
-    // This ensures smoother animations by avoiding setTimeout inaccuracies
     for (let i = 0; i < count; i++) {
       // Create emoji element
       const emojiElement = document.createElement('div');
@@ -1470,12 +1472,11 @@ class Conference {
       const rotateAmount = (Math.random() > 0.5 ? 1 : -1) * Math.floor(Math.random() * 20 + 5);
       emojiElement.style.setProperty('--rotate-amt', `${rotateAmount}deg`);
       
-      // Set staggered animation delays (more consistent pattern)
-      // Distribute emojis evenly over 400ms for smoother appearance
+      // Set staggered animation delays
       const animDelay = (i / count) * 0.4;
       emojiElement.style.animationDelay = `${animDelay}s`;
       
-      // Use consistent animation duration for more predictable movement
+      // Use consistent animation duration
       emojiElement.style.animationDuration = '5s';
       
       // Add to container immediately
