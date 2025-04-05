@@ -42,9 +42,8 @@ cp .env.example .env
 
 4. Update the `.env` file with your 100ms credentials:
 ```
-APP_ACCESS_KEY=your_100ms_app_access_key
-APP_SECRET_KEY=your_100ms_app_secret_key
-TEMPLATE_ID=your_100ms_template_id
+VITE_API_BASE_URL=...
+VITE_NEYNAR_API_KEY=...
 ```
 
 ### Running the Application
@@ -54,23 +53,13 @@ TEMPLATE_ID=your_100ms_template_id
 bun run dev
 ```
 
-2. Start the API server:
-```bash
-bun run dev:server
-```
-
-The frontend will be available at `http://localhost:5173` and the API server at `http://localhost:8000`.
+The frontend will be available at `http://localhost:5173`.
 
 ### Production
 
 1. Build the frontend:
 ```bash
 bun run build
-```
-
-2. Run the production server:
-```bash
-bun run start
 ```
 
 ## Frame Integration
@@ -83,12 +72,10 @@ Fariscope integrates with Farcaster Frames, allowing users to:
 
 ## Project Structure
 
-- `/api` - Frame API handlers
-- `/docs` - Documentation
+- `/docs` - Documentation for server and frames SDK
 - `/public` - Static assets
 - `/src` - Frontend code
   - `/utils` - Utility functions and validators
-- `server.js` - API server for room management
 
 ## License
 
