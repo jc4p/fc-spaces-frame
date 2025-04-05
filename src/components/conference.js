@@ -987,12 +987,9 @@ class Conference {
     } catch (error) {
       console.error("Error parsing metadata:", error);
     }
-    
-    // Also check if this is a speaker with creator role
-    const role = peerItem.dataset.role;
-    const hostBadge = peerItem.querySelector('.creator-badge');
-    if (hostBadge || isCreator) {
-      console.log("Skipping profile view for room creator");
+
+    if (isCreator) {
+      console.log("Skipping profile view b/c they're the room creator");
       return;
     }
     
