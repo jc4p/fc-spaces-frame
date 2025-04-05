@@ -617,13 +617,14 @@ class Conference {
       isStreamer,
       controlsHidden: !isStreamer
     });
+
+    this.controls.classList.remove('hide');
         
     // Also make sure host controls are visible if user should be a streamer
     if (isStreamer) {
       this.hostControls.classList.remove('hide');
       this.viewerControls.classList.add('hide');
     } else {
-      this.controls.classList.remove('hide');
       this.viewerControls.classList.remove('hide');
       this.hostControls.classList.add('hide');
     }
@@ -950,11 +951,31 @@ class Conference {
     if (!peerItem) return;
     
     const peerId = peerItem.dataset.peerId;
-    const peers = hmsService.store.getState(selectPeers);
+    const peers = hmsService.getPeers();
     
     // Find the clicked peer
     const peer = peers.find(p => p.id === peerId);
     if (!peer) return;
+    
+    // Check if this is a room creator - don't open profile view for creators
+    // as it conflicts with mute/unmute functionality
+    let isCreator = false;
+    try {
+      if (peer.metadata) {
+        const metadata = typeof peer.metadata === 'string' ? JSON.parse(peer.metadata) : peer.metadata;
+        isCreator = metadata.isCreator === true;
+      }
+    } catch (error) {
+      console.error("Error parsing metadata:", error);
+    }
+    
+    // Also check if this is a speaker with creator role
+    const role = peerItem.dataset.role;
+    const hostBadge = peerItem.querySelector('.creator-badge');
+    if (hostBadge || isCreator) {
+      console.log("Skipping profile view for room creator");
+      return;
+    }
     
     // Try to get profile information to find FID
     try {
@@ -1380,8 +1401,14 @@ class Conference {
     // Check if this sender already has a container
     let senderContainer = this.emojiContainer.querySelector(`.${reactionClass}`);
     
-    // Create sender container if it doesn't exist
-    if (!senderContainer) {
+    // If container exists, clear any existing emojis before adding new ones
+    if (senderContainer) {
+      // Clear all existing emojis from this sender
+      while (senderContainer.firstChild) {
+        senderContainer.removeChild(senderContainer.firstChild);
+      }
+    } else {
+      // Create a new container if one doesn't exist
       senderContainer = document.createElement('div');
       senderContainer.className = `reaction-container ${reactionClass}`;
       
@@ -1397,14 +1424,23 @@ class Conference {
       senderContainer.style.pointerEvents = 'none';
       
       this.emojiContainer.appendChild(senderContainer);
-      
-      // Remove container after animations complete
-      setTimeout(() => {
-        if (senderContainer && senderContainer.parentNode) {
-          senderContainer.remove();
-        }
-      }, 6500);
     }
+    
+    // Reset the removal timeout to ensure container stays for the full duration of the new emojis
+    const existingTimeout = senderContainer.dataset.removalTimeout;
+    if (existingTimeout) {
+      clearTimeout(parseInt(existingTimeout));
+    }
+    
+    // Set new timeout to remove container after animations complete
+    const removalTimeout = setTimeout(() => {
+      if (senderContainer && senderContainer.parentNode) {
+        senderContainer.remove();
+      }
+    }, 6500);
+    
+    // Store the timeout ID on the container for future reference
+    senderContainer.dataset.removalTimeout = removalTimeout;
     
     // Create batch of emojis for the reaction
     const count = Math.floor(Math.random() * 6) + 6; // 6-11 emojis

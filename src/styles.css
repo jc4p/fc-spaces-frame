@@ -385,7 +385,7 @@ form h2,
 }
 
 .creator-badge {
-  background-color: #ffc107; /* Gold color for the crown */
+  background-color: transparent;
   color: #000;
   font-size: 15px;
 }
