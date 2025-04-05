@@ -254,6 +254,70 @@ class Conference {
     
     // Subscribe to connection state
     hmsService.store.subscribe(this.handleConnectionChange.bind(this), selectIsConnectedToRoom);
+    
+    // Add mutation observer to ensure click handlers are attached to new participants
+    this.setupDOMObservers();
+  }
+  
+  /**
+   * Set up DOM observers to handle dynamic content changes
+   */
+  setupDOMObservers() {
+    // Create observer for listeners list to reattach click handlers when new participants join
+    if (this.participantObserver) {
+      this.participantObserver.disconnect();
+    }
+    
+    this.participantObserver = new MutationObserver((mutations) => {
+      // Check if we need to reattach click handlers
+      if (mutations.some(mutation => mutation.type === 'childList')) {
+        // Small delay to ensure DOM is fully updated
+        setTimeout(() => {
+          // Check if user is the room creator - only attach click handlers if they are
+          const isCreator = hmsService.isRoomCreator();
+          if (isCreator) {
+            console.log('Room creator detected - reattaching click handlers for new participants');
+            
+            // Reattach click handlers to speakers
+            document.querySelectorAll('.speaker-item').forEach(item => {
+              // Remove existing handlers first to prevent duplicates
+              const newItem = item.cloneNode(true);
+              if (item.parentNode) {
+                item.parentNode.replaceChild(newItem, item);
+              }
+              // Add click handler
+              newItem.addEventListener('click', this.handlePeerClick.bind(this));
+            });
+            
+            // Reattach click handlers to listeners
+            document.querySelectorAll('.listener-item').forEach(item => {
+              // Remove existing handlers first to prevent duplicates
+              const newItem = item.cloneNode(true);
+              if (item.parentNode) {
+                item.parentNode.replaceChild(newItem, item);
+              }
+              // Add click handler
+              newItem.addEventListener('click', this.handlePeerClick.bind(this));
+            });
+          }
+        }, 100);
+      }
+    });
+    
+    // Observe both speakers and listeners lists
+    if (this.speakersList) {
+      this.participantObserver.observe(this.speakersList, {
+        childList: true,
+        subtree: true
+      });
+    }
+    
+    if (this.listenersList) {
+      this.participantObserver.observe(this.listenersList, {
+        childList: true,
+        subtree: true
+      });
+    }
   }
   
   /**
@@ -448,6 +512,9 @@ class Conference {
           this.listenersList.scrollTop = 1;
           this.listenersList.scrollTop = 0;
         }
+        
+        // Set up DOM observers to catch new participants
+        this.setupDOMObservers();
       }, 300);
       
       // If we're on iOS, try to unlock audio again
@@ -461,6 +528,11 @@ class Conference {
       // Clear the room ID when disconnecting
       console.log('Connection: Clearing currentRoomId (was:', this.currentRoomId, ')');
       this.currentRoomId = null;
+      
+      // Disconnect any DOM observers
+      if (this.participantObserver) {
+        this.participantObserver.disconnect();
+      }
       
       // Hide conference UI
       if (this.conferenceEl) this.conferenceEl.classList.add("hide");
