@@ -9,6 +9,7 @@ import { DOM_IDS, HMS_ROLES } from '../config.js';
 import hmsService from '../services/hmsService.js';
 import userService from '../services/userService.js';
 import farcasterService from '../services/farcasterService.js';
+import modals from '../components/modals.js';
 import { showErrorMessage, showSuccessMessage, updateMuteButtonUI } from '../utils/uiUtils.js';
 
 /**
@@ -17,12 +18,14 @@ import { showErrorMessage, showSuccessMessage, updateMuteButtonUI } from '../uti
 class Conference {
   constructor() {
     // DOM elements
+    this.header = document.querySelector('header');
     this.roomTitle = document.getElementById(DOM_IDS.ROOM_TITLE);
     this.roomDuration = document.getElementById(DOM_IDS.ROOM_DURATION);
     this.speakersList = document.getElementById(DOM_IDS.SPEAKERS_LIST);
     this.listenersList = document.getElementById(DOM_IDS.LISTENERS_LIST);
     this.listenersCount = document.getElementById(DOM_IDS.LISTENERS_COUNT);
     this.hostControls = document.getElementById(DOM_IDS.HOST_CONTROLS);
+    this.viewerControls = document.getElementById(DOM_IDS.VIEWER_CONTROLS);
     this.muteAudio = document.getElementById(DOM_IDS.MUTE_AUDIO);
     this.endRoomBtn = document.getElementById(DOM_IDS.END_ROOM_BTN);
     this.leaveBtn = document.getElementById(DOM_IDS.LEAVE_BTN);
@@ -33,6 +36,9 @@ class Conference {
     this.listenerName = document.getElementById(DOM_IDS.LISTENER_NAME);
     this.promoteListenerBtn = document.getElementById(DOM_IDS.PROMOTE_LISTENER_BTN);
     this.demoteSpeakerBtn = document.getElementById(DOM_IDS.DEMOTE_SPEAKER_BTN);
+    
+    // State variables
+    this.currentRoomId = null;
     
     // Setup event listeners
     this.setupEventListeners();
@@ -83,6 +89,126 @@ class Conference {
         }
       });
     });
+    
+    // Listen for debug events
+    document.addEventListener('debugRoomJoined', this.handleDebugRoomJoined.bind(this));
+    document.addEventListener('refreshConferenceUI', this.handleRefreshUI.bind(this));
+    document.addEventListener('debugSpeakingUpdate', this.handleDebugSpeakingUpdate.bind(this));
+    document.addEventListener('debugLeaveRoom', this.handleDebugLeaveRoom.bind(this));
+    
+    // Fix listeners list layout
+    this.fixListenersListLayout();
+  }
+  
+  /**
+   * Fix the listeners list layout to prevent it from being hidden behind the bottom nav
+   */
+  fixListenersListLayout() {
+    if (!this.listenersList || !this.conferenceEl || !this.controls) return;
+    
+    // Reset any previously applied styles that could be causing issues
+    this.conferenceEl.style = '';
+    this.listenersList.style = '';
+    
+    // Add specific styles via a stylesheet to avoid overriding existing styles
+    const styleId = 'conference-layout-styles';
+    let styleEl = document.getElementById(styleId);
+    
+    if (!styleEl) {
+      styleEl = document.createElement('style');
+      styleEl.id = styleId;
+      document.head.appendChild(styleEl);
+    }
+    
+    // Get the controls height for the bottom padding
+    const controlsHeight = this.controls.offsetHeight || 60;
+    
+    // Create a CSS stylesheet with all our layout fixes
+    styleEl.textContent = `
+      #${DOM_IDS.CONFERENCE} {
+        position: relative;
+        width: 100%;
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      
+      #${DOM_IDS.SPEAKERS_LIST} {
+        width: 100%;
+        flex-shrink: 0;
+      }
+      
+      #${DOM_IDS.LISTENERS_LIST} {
+        width: 100%;
+        flex: 1;
+        overflow-y: auto;
+        overflow-x: hidden;
+        padding-bottom: ${controlsHeight + 20}px;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(255,255,255,0.3) transparent;
+      }
+      
+      #${DOM_IDS.LISTENERS_LIST}::-webkit-scrollbar {
+        width: 5px;
+      }
+      
+      #${DOM_IDS.LISTENERS_LIST}::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      
+      #${DOM_IDS.LISTENERS_LIST}::-webkit-scrollbar-thumb {
+        background-color: rgba(255,255,255,0.3);
+        border-radius: 5px;
+      }
+      
+      #${DOM_IDS.CONTROLS} {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        width: 100%;
+        z-index: 100;
+      }
+    `;
+    
+    // Update the layout when the window is resized
+    const updateLayout = () => {
+      const updatedControlsHeight = this.controls.offsetHeight || 60;
+      document.getElementById(styleId).textContent = document.getElementById(styleId).textContent.replace(
+        /padding-bottom: \d+px/,
+        `padding-bottom: ${updatedControlsHeight + 20}px`
+      );
+    };
+    
+    // Remove any existing resize listener to avoid duplicates
+    window.removeEventListener('resize', updateLayout);
+    
+    // Add the resize listener
+    window.addEventListener('resize', updateLayout);
+    
+    // Set up an observer to watch for changes in listeners list content
+    // This will help handle dynamic content changes
+    if (this.listenersObserver) {
+      this.listenersObserver.disconnect();
+    }
+    
+    this.listenersObserver = new MutationObserver((mutations) => {
+      // Check if we need to update scrolling or layout
+      if (mutations.some(mutation => mutation.type === 'childList')) {
+        // Small delay to let the DOM stabilize
+        setTimeout(() => {
+          // Force layout recalculation by a small scroll
+          this.listenersList.scrollTop = 1;
+          this.listenersList.scrollTop = 0;
+        }, 50);
+      }
+    });
+    
+    // Start observing changes
+    this.listenersObserver.observe(this.listenersList, {
+      childList: true,
+      subtree: true
+    });
   }
   
   /**
@@ -119,34 +245,64 @@ class Conference {
    */
   async handleEndRoom() {
     try {
-      const { isCreator, roomId } = await hmsService.leaveRoom();
+      // Check if user is a creator WITHOUT leaving the room first
+      const isCreator = hmsService.isRoomCreator();
+      const roomId = this.currentRoomId;
+      
+      console.log('End Room: Using stored roomId:', roomId);
       
       if (isCreator && roomId) {
-        // Ask user if they want to end the room for everyone
-        const shouldDisable = confirm('Do you want to end this room for everyone? Click Cancel to leave without ending the room.');
-        
-        if (shouldDisable) {
-          try {
-            const fid = farcasterService.getUserFid();
-            const address = await farcasterService.getWalletAddress() || document.getElementById(DOM_IDS.ETH_ADDRESS_INPUT)?.value || '';
-            
-            if (!fid || !address) {
-              throw new Error('Missing required credentials to end the room');
+        // Use custom modal instead of confirm()
+        modals.showConfirmation({
+          title: 'End Room',
+          message: 'Do you want to end this room for everyone? If you click Cancel, you will leave without ending the room.',
+          confirmText: 'End Room',
+          cancelText: 'Just Leave',
+          confirmClass: 'btn-danger',
+          cancelClass: 'btn-secondary',
+          onConfirm: async () => {
+            try {
+              const fid = farcasterService.getUserFid();
+              const address = await farcasterService.getWalletAddress() || document.getElementById(DOM_IDS.ETH_ADDRESS_INPUT)?.value || '';
+              
+              if (!fid || !address) {
+                showErrorMessage('Missing required credentials to end the room');
+                return;
+              }
+              
+              // Disable the room on the server
+              const apiDisableResult = await window.apiService.disableRoom(roomId, address, fid);
+              showSuccessMessage('Room ended successfully for everyone.');
+              
+              // NOW leave the room
+              await hmsService.actions.leave();
+              hmsService.stopRoomTimer();
+              
+              // Clear our room ID
+              this.currentRoomId = null;
+            } catch (disableError) {
+              console.error('Failed to disable room:', disableError);
+              showErrorMessage('Failed to end the room, but you have been disconnected.');
+              
+              // Still leave the room on error
+              await hmsService.actions.leave();
+              hmsService.stopRoomTimer();
+              this.currentRoomId = null;
             }
-            
-            // This will be implemented by the caller
-            const apiDisableResult = await window.apiService.disableRoom(roomId, address, fid);
-            showSuccessMessage('Room ended successfully for everyone.');
-          } catch (disableError) {
-            console.error('Failed to disable room:', disableError);
-            showErrorMessage('Failed to end the room, but you have been disconnected.');
+          },
+          onCancel: async () => {
+            // Just leave without ending the room
+            await hmsService.actions.leave();
+            hmsService.stopRoomTimer();
+            this.currentRoomId = null;
           }
-        }
+        });
+      } else {
+        // Not a creator, just leave immediately
+        await hmsService.actions.leave();
+        hmsService.stopRoomTimer();
+        this.currentRoomId = null;
       }
-      
-      // Leave the room
-      await hmsService.actions.leave();
-      hmsService.stopRoomTimer();
       
       // UI update will be handled by connection state subscription
     } catch (error) {
@@ -160,33 +316,59 @@ class Conference {
    */
   async handleLeaveRoom() {
     try {
-      const result = await hmsService.leaveRoom();
+      // Check if user is a creator WITHOUT leaving the room first
+      const isCreator = hmsService.isRoomCreator();
+      const roomId = this.currentRoomId;
+      
+      console.log('Leave Room: Using stored roomId:', roomId);
       
       // If user is creator, ask if they want to end room
-      if (result && result.isCreator && result.roomId) {
-        // Ask user if they want to end the room for everyone
-        const shouldDisable = confirm('Do you want to end this room for everyone? Click Cancel to leave without ending the room.');
-        
-        if (shouldDisable) {
-          try {
-            const fid = farcasterService.getUserFid();
-            const address = await farcasterService.getWalletAddress() || document.getElementById(DOM_IDS.ETH_ADDRESS_INPUT)?.value || '';
-            
-            if (!fid || !address) {
-              throw new Error('Missing required credentials to end the room');
+      if (isCreator && roomId) {
+        // Use custom modal instead of confirm()
+        modals.showConfirmation({
+          title: 'End Room',
+          message: 'Do you want to end this room for everyone? If you click Cancel, you will leave without ending the room.',
+          confirmText: 'End Room',
+          cancelText: 'Just Leave',
+          confirmClass: 'btn-danger',
+          cancelClass: 'btn-secondary',
+          onConfirm: async () => {
+            try {
+              const fid = farcasterService.getUserFid();
+              const address = await farcasterService.getWalletAddress() || document.getElementById(DOM_IDS.ETH_ADDRESS_INPUT)?.value || '';
+              
+              if (!fid || !address) {
+                showErrorMessage('Missing required credentials to end the room');
+                return;
+              }
+              
+              // Disable the room on the server
+              await window.apiService.disableRoom(roomId, address, fid);
+              showSuccessMessage('Room ended successfully for everyone.');
+              
+              // NOW leave the room
+              await hmsService.actions.leave();
+              this.currentRoomId = null;
+            } catch (disableError) {
+              console.error('Failed to disable room:', disableError);
+              showErrorMessage('Failed to end the room, but you have been disconnected.');
+              
+              // Still leave the room on error
+              await hmsService.actions.leave();
+              this.currentRoomId = null;
             }
-            
-            await window.apiService.disableRoom(result.roomId, address, fid);
-            showSuccessMessage('Room ended successfully for everyone.');
-          } catch (disableError) {
-            console.error('Failed to disable room:', disableError);
-            showErrorMessage('Failed to end the room, but you have been disconnected.');
+          },
+          onCancel: async () => {
+            // Just leave without ending the room
+            await hmsService.actions.leave();
+            this.currentRoomId = null;
           }
-        }
+        });
+      } else {
+        // Not a creator, just leave immediately
+        await hmsService.actions.leave();
+        this.currentRoomId = null;
       }
-      
-      // Leave the room
-      await hmsService.actions.leave();
       
       // UI update will be handled by connection state subscription
     } catch (error) {
@@ -205,15 +387,40 @@ class Conference {
     
     if (isConnected) {
       // Show conference UI
-      form.classList.add("hide");
-      roomsList.classList.add("hide");
-      this.conferenceEl.classList.remove("hide");
+      if (form) form.classList.add("hide");
+      if (roomsList) roomsList.classList.add("hide");
+      if (this.conferenceEl) this.conferenceEl.classList.remove("hide");
+      if (this.header) this.header.classList.add("hide");
       
       // Show/hide controls based on role
       this.updateControlsVisibility();
       
       // Start the speaking detection interval
       hmsService.startSpeakingDetection();
+      
+      // Get the room ID if not already set
+      if (!this.currentRoomId) {
+        this.currentRoomId = hmsService.getCurrentRoomId();
+        console.log('Connection: Set currentRoomId to:', this.currentRoomId);
+      }
+      
+      // Reapply layout fixes after the UI becomes visible and DOM updates
+      setTimeout(() => {
+        // Recheck the DOM elements since they might have changed
+        this.roomTitle = document.getElementById(DOM_IDS.ROOM_TITLE) || this.roomTitle;
+        this.roomDuration = document.getElementById(DOM_IDS.ROOM_DURATION) || this.roomDuration;
+        this.speakersList = document.getElementById(DOM_IDS.SPEAKERS_LIST) || this.speakersList;
+        this.listenersList = document.getElementById(DOM_IDS.LISTENERS_LIST) || this.listenersList;
+        this.controls = document.getElementById(DOM_IDS.CONTROLS) || this.controls;
+        
+        this.fixListenersListLayout();
+        
+        // Force a scrollbar refresh with a tiny scroll
+        if (this.listenersList) {
+          this.listenersList.scrollTop = 1;
+          this.listenersList.scrollTop = 0;
+        }
+      }, 300);
       
       // If we're on iOS, try to unlock audio again
       if (/iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream) {
@@ -223,12 +430,17 @@ class Conference {
         }, 500);
       }
     } else {
+      // Clear the room ID when disconnecting
+      console.log('Connection: Clearing currentRoomId (was:', this.currentRoomId, ')');
+      this.currentRoomId = null;
+      
       // Hide conference UI
-      this.conferenceEl.classList.add("hide");
-      this.controls.classList.add("hide");
+      if (this.conferenceEl) this.conferenceEl.classList.add("hide");
+      if (this.controls) this.controls.classList.add("hide");
+      if (this.header) this.header.classList.remove("hide");
       
       // Return to room list
-      roomsList.classList.remove("hide");
+      if (roomsList) roomsList.classList.remove("hide");
       
       // Stop the speaking detection interval
       hmsService.stopSpeakingDetection();
@@ -240,6 +452,24 @@ class Conference {
       document.querySelectorAll('.modal').forEach(modal => {
         modal.classList.add('hide');
       });
+      
+      // Refresh the rooms list when returning to it
+      try {
+        // Check if window.app exists and has the roomsList component
+        if (window.app && window.app.roomsList) {
+          console.log('Refreshing rooms list after leaving room');
+          window.app.roomsList.loadRooms();
+        } else {
+          // Alternative approach: click the refresh button if it exists
+          const refreshBtn = document.getElementById(DOM_IDS.REFRESH_ROOMS_BTN);
+          if (refreshBtn) {
+            console.log('Clicking refresh button to update rooms list');
+            refreshBtn.click();
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to refresh rooms list:', err);
+      }
       
       // Additional cleanup will be handled by the rooms component
     }
@@ -379,13 +609,21 @@ class Conference {
    * Render the peers list
    */
   renderPeers() {
-    const peers = hmsService.store.getState(selectPeers);
-    const localPeer = hmsService.store.getState(selectLocalPeer);
+    // Use hmsService.getPeers() which supports debug mode instead of directly using the store
+    const peers = hmsService.getPeers();
+    const localPeer = hmsService.getLocalPeer();
     
     if (!peers.length) return;
     
     // Set room title based on the room description if available
     const localPeerRoom = localPeer?.roomId;
+    
+    // Store the currentRoomId from HMS service or local peer
+    // This ensures we have the roomId available when needed for ending/leaving
+    if (!this.currentRoomId) {
+      this.currentRoomId = hmsService.getCurrentRoomId() || localPeerRoom || null;
+      console.log('Conference: Set currentRoomId to:', this.currentRoomId);
+    }
     
     // Try to get the current room details from any active room element
     const activeRoomElement = document.querySelector('.room-item.active-room');
@@ -394,11 +632,17 @@ class Conference {
       if (roomDescription) {
         this.roomTitle.textContent = roomDescription;
       }
+      
+      // If we have a room ID in the dataset, store it
+      if (activeRoomElement.dataset.roomId && !this.currentRoomId) {
+        this.currentRoomId = activeRoomElement.dataset.roomId;
+        console.log('Conference: Set currentRoomId from active room element:', this.currentRoomId);
+      }
     }
     
     // Fallback to streamer name if no room description is available
     if (!this.roomTitle.textContent) {
-      const streamer = peers.find(peer => peer.roleName === HMS_ROLES.STREAMER);
+      const streamer = peers.find(peer => peer.roleName === HMS_ROLES.STREAMER || peer.role === HMS_ROLES.STREAMER);
       if (streamer) {
         let streamerId = streamer.name;
         if (streamerId.startsWith('FID:')) {
@@ -411,13 +655,13 @@ class Conference {
     // Separate speakers (streamers) and listeners (viewers)
     // Check both the role and metadata to determine if someone should be a speaker
     const speakers = peers.filter(peer => {
-      // Check role name
-      if (peer.roleName === HMS_ROLES.STREAMER) return true;
+      // Check role name (support both HMS objects and mock objects)
+      if (peer.roleName === HMS_ROLES.STREAMER || peer.role === HMS_ROLES.STREAMER) return true;
       
       // Check metadata for creator flag as fallback
       try {
         if (peer.metadata) {
-          const metadata = JSON.parse(peer.metadata);
+          const metadata = typeof peer.metadata === 'string' ? JSON.parse(peer.metadata) : peer.metadata;
           if (metadata.isCreator === true) return true;
         }
       } catch (e) {
@@ -431,7 +675,7 @@ class Conference {
     const listeners = peers.filter(peer => !speakers.find(s => s.id === peer.id));
     
     // If the room is starting for the first time, set up the duration timer
-    if (speakers.length && !roomStartTime) {
+    if (speakers.length && !hmsService.getRoomDuration()) {
       hmsService.startRoomTimer();
     }
     
@@ -439,19 +683,22 @@ class Conference {
     this.roomDuration.textContent = hmsService.getRoomDuration();
     
     // Check if we're the host (streamer role) AND the creator
-    const isHost = localPeer?.roleName === HMS_ROLES.STREAMER;
+    // Use isLocalAudioEnabled method which supports debug mode
+    const isHost = localPeer?.roleName === HMS_ROLES.STREAMER || 
+                   localPeer?.role === HMS_ROLES.STREAMER;
     
     // Check if we're the creator of the room
     const isCreator = hmsService.isRoomCreator();
-    
-    // Show host controls only if user is a streamer
-    this.hostControls.classList.toggle('hide', !isHost);
-    
-    // Only show End Room button if the user is the room creator
-    if (this.endRoomBtn) {
-      this.endRoomBtn.classList.toggle('hide', !isCreator);
+
+    // Show the correct buttons per role
+    if (isCreator) {
+      this.viewerControls.classList.add('hide');
+      this.hostControls.classList.remove('hide');
+    } else {
+      this.viewerControls.classList.remove('hide');
+      this.hostControls.classList.add('hide');
     }
-    
+
     // Render speakers list
     this.renderSpeakersList(speakers, localPeer, isCreator);
     
@@ -477,27 +724,37 @@ class Conference {
     }
     
     this.speakersList.innerHTML = speakers.map(speaker => {
+      // Support both real HMS peers and mock peers in debug mode
       const profile = userService.getProfileFromPeer(speaker);
       const displayName = userService.getDisplayName(speaker);
-      const isLocal = speaker.id === localPeer?.id;
+      const isLocal = speaker.isLocal || (localPeer && speaker.id === localPeer.id);
       
       // Get accurate mute state - for local peer, use the global state selector
       let isMuted;
       if (isLocal) {
         // For local peer, use the most reliable source of truth
-        isMuted = !hmsService.store.getState(selectIsLocalAudioEnabled);
+        isMuted = !hmsService.isLocalAudioEnabled();
       } else {
-        // For remote peers, use their peer object state
-        isMuted = !speaker.audioEnabled;
+        // For remote peers, use their peer object state (handle both real and mock peers)
+        isMuted = !(speaker.audioEnabled === true);
       }
       
       const isHost = true; // All speakers are hosts in this app
-      const isSpeaking = hmsService.isPeerSpeaking(speaker.id);
+      const isSpeaking = speaker.isSpeaking || hmsService.isPeerSpeaking(speaker.id);
       
       // Check if we have a profile picture
-      const hasPfp = profile && profile.pfpUrl;
+      let hasPfp = false;
+      let pfpUrl = '';
+      if (profile && profile.pfpUrl) {
+        hasPfp = true;
+        pfpUrl = profile.pfpUrl;
+      } else if (speaker.pfp) { // Support mock peers in debug mode
+        hasPfp = true;
+        pfpUrl = speaker.pfp;
+      }
+      
       const avatarContent = hasPfp 
-        ? `<img src="${profile.pfpUrl}" alt="${displayName}" />`
+        ? `<img src="${pfpUrl}" alt="${displayName}" />`
         : speaker.name.charAt(0).toUpperCase();
       
       // Only show mute badge for local user
@@ -507,7 +764,7 @@ class Conference {
       const showInteractionHint = !isLocal && userIsCreator;
       
       return `
-        <div class="speaker-item" data-peer-id="${speaker.id}" data-role="${HMS_ROLES.STREAMER}" title="${userIsCreator && !isLocal ? 'Click to manage this speaker' : ''}">
+        <div class="speaker-item" data-peer-id="${speaker.id}" data-role="${speaker.roleName || speaker.role || HMS_ROLES.STREAMER}" title="${userIsCreator && !isLocal ? 'Click to manage this speaker' : ''}">
           <div class="avatar${hasPfp ? ' with-image' : ''}${isSpeaking ? ' speaking' : ''}">
             ${avatarContent}
             ${isHost ? '<div class="avatar-badge host-badge">★</div>' : ''}
@@ -520,7 +777,7 @@ class Conference {
     }).join('');
     
     // Add click handlers for speaker items if local user is host
-    if (localPeer?.roleName === HMS_ROLES.STREAMER) {
+    if (localPeer?.roleName === HMS_ROLES.STREAMER || localPeer?.role === HMS_ROLES.STREAMER) {
       document.querySelectorAll('.speaker-item').forEach(item => {
         item.addEventListener('click', this.handlePeerClick.bind(this));
       });
@@ -548,26 +805,36 @@ class Conference {
     }
     
     this.listenersList.innerHTML = listeners.map(listener => {
+      // Support both real HMS peers and mock peers in debug mode
       const profile = userService.getProfileFromPeer(listener);
       const displayName = userService.getDisplayName(listener);
-      const isLocal = listener.id === localPeer?.id;
+      const isLocal = listener.isLocal || (localPeer && listener.id === localPeer.id);
       
       // Get accurate mute state - for local peer, use the global state selector
       let isMuted;
       if (isLocal) {
         // For local peer, use the most reliable source of truth
-        isMuted = !hmsService.store.getState(selectIsLocalAudioEnabled);
+        isMuted = !hmsService.isLocalAudioEnabled();
       } else {
-        // For remote peers, use their peer object state
-        isMuted = !listener.audioEnabled;
+        // For remote peers, use their peer object state (handle both real and mock peers)
+        isMuted = !(listener.audioEnabled === true);
       }
       
-      const isSpeaking = hmsService.isPeerSpeaking(listener.id);
+      const isSpeaking = listener.isSpeaking || hmsService.isPeerSpeaking(listener.id);
       
       // Check if we have a profile picture
-      const hasPfp = profile && profile.pfpUrl;
+      let hasPfp = false;
+      let pfpUrl = '';
+      if (profile && profile.pfpUrl) {
+        hasPfp = true;
+        pfpUrl = profile.pfpUrl;
+      } else if (listener.pfp) { // Support mock peers in debug mode
+        hasPfp = true;
+        pfpUrl = listener.pfp;
+      }
+      
       const avatarContent = hasPfp 
-        ? `<img src="${profile.pfpUrl}" alt="${displayName}" />`
+        ? `<img src="${pfpUrl}" alt="${displayName}" />`
         : listener.name.charAt(0).toUpperCase();
       
       // Only show mute badge for local user
@@ -577,7 +844,7 @@ class Conference {
       const showInteractionHint = !isLocal && userIsCreator;
       
       return `
-        <div class="listener-item" data-peer-id="${listener.id}" data-role="${HMS_ROLES.VIEWER}" title="${userIsCreator && !isLocal ? 'Click to invite this listener to speak' : ''}">
+        <div class="listener-item" data-peer-id="${listener.id}" data-role="${listener.roleName || listener.role || HMS_ROLES.VIEWER}" title="${userIsCreator && !isLocal ? 'Click to invite this listener to speak' : ''}">
           <div class="avatar listener-avatar${hasPfp ? ' with-image' : ''}${isSpeaking ? ' speaking' : ''}">
             ${avatarContent}
             ${showMuteBadge ? '<div class="avatar-badge muted-badge">🔇</div>' : ''}
@@ -731,6 +998,67 @@ class Conference {
       if (promoteDescription) promoteDescription.classList.add('hide');
       if (demoteDescription) demoteDescription.classList.toggle('hide', !userIsCreator);
     }
+  }
+  
+  /**
+   * Handle debug room join event
+   * @param {CustomEvent} event - Debug room join event
+   */
+  handleDebugRoomJoined(event) {
+    console.log('[DEBUG] Conference received debug room joined event:', event.detail);
+    
+    // Store room ID from the debug event
+    if (event.detail?.roomId) {
+      this.currentRoomId = event.detail.roomId;
+      console.log('[DEBUG] Conference: Set currentRoomId from debug event:', this.currentRoomId);
+    }
+    
+    // Update connection status
+    this.handleConnectionChange(true);
+    
+    // Force render the peers immediately
+    this.renderPeers();
+    
+    // Update room title
+    if (this.roomTitle) {
+      this.roomTitle.textContent = 'Debug Room';
+    }
+    
+    // Show controls
+    if (this.controls) {
+      this.controls.classList.remove('hide');
+    }
+    
+    // Apply layout fixes for debug mode after a small delay
+    // to ensure DOM has been properly updated
+    setTimeout(() => {
+      this.fixListenersListLayout();
+    }, 300);
+  }
+  
+  /**
+   * Handle refresh UI event
+   */
+  handleRefreshUI() {
+    console.log('[DEBUG] Refreshing conference UI');
+    this.renderPeers();
+  }
+  
+  /**
+   * Handle debug speaking update event
+   * @param {CustomEvent} event - Debug speaking update event
+   */
+  handleDebugSpeakingUpdate(event) {
+    console.log('[DEBUG] Conference received speaking update event:', event.detail);
+    this.renderPeers();
+  }
+  
+  /**
+   * Handle debug leave room event
+   */
+  handleDebugLeaveRoom() {
+    console.log('[DEBUG] Conference received leave room event');
+    this.handleConnectionChange(false);
   }
 }
 

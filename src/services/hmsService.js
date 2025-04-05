@@ -11,9 +11,10 @@ import {
   selectPeerAudioByID,
 } from "@100mslive/hms-video-store";
 
-import { HMS_ROLES, SPEAKING_THRESHOLD, DELAYS } from '../config.js';
+import { HMS_ROLES, SPEAKING_THRESHOLD, DELAYS, DEBUG_MODE, DEBUG_ROOM } from '../config.js';
 import { showErrorMessage, showSuccessMessage } from '../utils/uiUtils.js';
 import { getMicrophonePermission, unlockIOSAudio, isIOSBrowser } from '../utils/audioUtils.js';
+import { generateMockUsers } from '../utils/mockData.js';
 
 // Storage for current room state
 let currentRoomId = null;
@@ -22,6 +23,10 @@ let roomDurationInterval = null;
 let roomCreatorFid = null;
 const speakingPeers = new Map();
 let speakingUpdateInterval;
+
+// Debug mode variables
+let debugMockPeers = [];
+let isDebugRoomActive = false;
 
 /**
  * Service for 100ms integration
@@ -35,14 +40,58 @@ class HMSService {
     this.actions = this.manager.getActions();
     
     // Configure HMS
-    this.actions.setLogLevel('warn');
+    this.actions.setLogLevel(DEBUG_MODE ? 'debug' : 'warn');
     
     // Setup internal state
     this.selectedPeerId = null;
     this.renderedPeerIDs = new Set();
     
+    // Initialize debug mode
+    if (DEBUG_MODE && DEBUG_ROOM.enabled) {
+      this.initDebugMode();
+    }
+    
     // Set up event listeners
     this.setupEventListeners();
+  }
+  
+  /**
+   * Initialize debug mode with mock peers
+   */
+  initDebugMode() {
+    console.log('[DEBUG] Initializing debug mode for HMS service');
+    
+    // Generate mock peers for debug mode
+    debugMockPeers = generateMockUsers(DEBUG_ROOM.participantCount, true, DEBUG_ROOM.creatorFid);
+    
+    // Make one peer local
+    if (debugMockPeers.length > 1) {
+      debugMockPeers[1].isLocal = true;
+      debugMockPeers[1].name = 'You (Debug)';
+      debugMockPeers[1].audioEnabled = true;
+    }
+    
+    // Setup speaking detection simulation for debug mode
+    if (DEBUG_MODE) {
+      setInterval(() => {
+        if (isDebugRoomActive) {
+          this.simulateSpeakingForDebug();
+        }
+      }, 2000);
+    }
+  }
+  
+  /**
+   * Simulate speaking indicators for debug mode
+   */
+  simulateSpeakingForDebug() {
+    // Randomly toggle speaking status for a few peers
+    debugMockPeers.forEach(peer => {
+      if (peer.role === HMS_ROLES.STREAMER && Math.random() > 0.7) {
+        peer.isSpeaking = !peer.isSpeaking;
+        speakingPeers.set(peer.id, peer.isSpeaking);
+      }
+    });
   }
   
   /**
@@ -102,27 +151,74 @@ class HMSService {
    */
   async joinAsViewer({ roomCode, userName, metaData }) {
     try {
-      const authToken = await this.actions.getAuthTokenByRoomCode({ roomCode });
-      
-      await this.actions.join({
-        userName,
-        authToken,
-        role: HMS_ROLES.VIEWER,
-        settings: {
-          isAudioMuted: true, // Viewers start muted
-          isVideoMuted: true, // No video needed for audio rooms
-        },
-        rememberDeviceSelection: true,
-        metaData: JSON.stringify(metaData),
-        onError: (error) => {
-          console.error("HMS join error:", error);
-          throw error;
+      // Handle debug mode
+      if (DEBUG_MODE && DEBUG_ROOM.enabled) {
+        console.log('[DEBUG] Joining debug room as viewer');
+        
+        // Set room id and start time
+        currentRoomId = DEBUG_ROOM.roomId;
+        roomStartTime = new Date();
+        isDebugRoomActive = true;
+        
+        // Start room timer
+        this.startRoomTimer();
+        
+        // Start speaking detection
+        this.startSpeakingDetection();
+        
+        // Ensure the local peer has isLocal set to true
+        if (debugMockPeers.length > 0) {
+          // Find a suitable peer to set as local
+          const localPeerIndex = debugMockPeers.findIndex(p => !p.isCreator) || 0;
+          if (localPeerIndex >= 0) {
+            // Reset isLocal flag for all peers
+            debugMockPeers.forEach(p => p.isLocal = false);
+            // Set the selected peer as local
+            debugMockPeers[localPeerIndex].isLocal = true;
+            debugMockPeers[localPeerIndex].name = userName || 'You (Debug)';
+            // Set role appropriately
+            debugMockPeers[localPeerIndex].role = HMS_ROLES.VIEWER;
+            debugMockPeers[localPeerIndex].roleName = HMS_ROLES.VIEWER;
+          }
         }
-      });
+        
+        // Trigger connection change events to update UI
+        const connectionChangeEvent = new Event('hms-connection-change');
+        document.dispatchEvent(connectionChangeEvent);
+        
+        console.log('[DEBUG] Debug viewer join successful');
+        
+        // Instead of making an actual HMS API call, return a simulated success response
+        return { success: true };
+      }
       
-      // Try to unlock iOS audio
-      if (isIOSBrowser()) {
-        unlockIOSAudio();
+      // Normal flow for production
+      try {
+        const authToken = await this.actions.getAuthTokenByRoomCode({ roomCode });
+        
+        await this.actions.join({
+          userName,
+          authToken,
+          role: HMS_ROLES.VIEWER,
+          settings: {
+            isAudioMuted: true, // Viewers start muted
+            isVideoMuted: true, // No video needed for audio rooms
+          },
+          rememberDeviceSelection: true,
+          metaData: JSON.stringify(metaData),
+          onError: (error) => {
+            console.error("HMS join error:", error);
+            throw error;
+          }
+        });
+        
+        // Try to unlock iOS audio
+        if (isIOSBrowser()) {
+          unlockIOSAudio();
+        }
+      } catch (error) {
+        console.error('Failed to join room:', error);
+        throw error;
       }
     } catch (error) {
       console.error('Failed to join room:', error);
@@ -137,6 +233,31 @@ class HMSService {
    */
   async joinAsStreamer({ roomCode, userName, metaData }) {
     try {
+      // Handle debug mode
+      if (DEBUG_MODE && DEBUG_ROOM.enabled) {
+        console.log('[DEBUG] Joining debug room as streamer');
+        
+        // Set room id and start time
+        currentRoomId = DEBUG_ROOM.roomId;
+        roomStartTime = new Date();
+        isDebugRoomActive = true;
+        
+        // Set room creator FID if this is the creator
+        if (metaData.isCreator) {
+          roomCreatorFid = metaData.fid;
+        }
+        
+        // Start room timer
+        this.startRoomTimer();
+        
+        // Start speaking detection
+        this.startSpeakingDetection();
+        
+        // Simulate connection success
+        return { success: true };
+      }
+      
+      // Normal flow for production
       const authToken = await this.actions.getAuthTokenByRoomCode({ roomCode });
       
       // For streamers, we start muted and then unmute after join
@@ -264,7 +385,29 @@ class HMSService {
    */
   async leaveRoom() {
     try {
-      // Before leaving, check if the user is the creator of the room
+      // Handle debug mode
+      if (DEBUG_MODE && isDebugRoomActive) {
+        console.log('[DEBUG] Leaving debug room');
+        
+        // Check if the user is the creator
+        const isCreator = this.isRoomCreator();
+        
+        // Clean up room timer
+        this.stopRoomTimer();
+        
+        // Stop speaking detection
+        this.stopSpeakingDetection();
+        
+        // Reset debug state
+        isDebugRoomActive = false;
+        
+        // Clear room ID
+        currentRoomId = null;
+        
+        return { isCreator, roomId: DEBUG_ROOM.roomId };
+      }
+      
+      // Regular flow - check if the user is the creator
       const localPeer = this.store.getState(selectLocalPeer);
       
       // If no local peer, just leave
@@ -607,6 +750,63 @@ class HMSService {
    */
   clearSelectedPeerId() {
     this.selectedPeerId = null;
+  }
+  
+  /**
+   * Get the list of peers (supports debug mode)
+   * @returns {Array} List of peers
+   */
+  getPeers() {
+    // In debug mode, return mock peers if debug room is active
+    if (DEBUG_MODE && isDebugRoomActive) {
+      return debugMockPeers;
+    }
+    
+    // Otherwise get peers from HMS store
+    return this.store.getState(selectPeers) || [];
+  }
+  
+  /**
+   * Check if we're connected to a room (supports debug mode)
+   * @returns {boolean} Whether connected to a room
+   */
+  isConnectedToRoom() {
+    // In debug mode, return true if debug room is active
+    if (DEBUG_MODE && isDebugRoomActive) {
+      return true;
+    }
+    
+    // Otherwise check HMS store
+    return this.store.getState(selectIsConnectedToRoom);
+  }
+  
+  /**
+   * Get local peer (supports debug mode)
+   * @returns {Object|null} Local peer if available
+   */
+  getLocalPeer() {
+    // In debug mode, return the first peer with isLocal set to true
+    if (DEBUG_MODE && isDebugRoomActive) {
+      return debugMockPeers.find(peer => peer.isLocal) || null;
+    }
+    
+    // Otherwise get from HMS store
+    return this.store.getState(selectLocalPeer);
+  }
+  
+  /**
+   * Check if local audio is enabled (supports debug mode)
+   * @returns {boolean} Whether local audio is enabled
+   */
+  isLocalAudioEnabled() {
+    // In debug mode, get from the local mock peer
+    if (DEBUG_MODE && isDebugRoomActive) {
+      const localPeer = debugMockPeers.find(peer => peer.isLocal);
+      return localPeer ? localPeer.audioEnabled : false;
+    }
+    
+    // Otherwise check HMS store
+    return this.store.getState(selectIsLocalAudioEnabled);
   }
 }
 

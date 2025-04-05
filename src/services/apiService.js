@@ -1,4 +1,5 @@
-import { API_CONFIG } from '../config.js';
+import { API_CONFIG, DEBUG_MODE, DEBUG_ROOM } from '../config.js';
+import { generateMockRoom, generateMockRooms } from '../utils/mockData.js';
 
 /**
  * API client for interacting with the backend server
@@ -6,6 +7,7 @@ import { API_CONFIG } from '../config.js';
 class ApiService {
   constructor(baseUrl) {
     this.baseUrl = baseUrl;
+    this.mockDebugRoom = DEBUG_ROOM.enabled ? generateMockRoom(DEBUG_ROOM.roomId, DEBUG_ROOM.roomName, DEBUG_ROOM.creatorFid) : null;
   }
 
   /**
@@ -13,6 +15,29 @@ class ApiService {
    * @returns {Promise<Object>} - Server response with rooms data
    */
   async listRooms() {
+    // Use mock data in debug mode
+    if (DEBUG_MODE) {
+      console.log('[DEBUG] Using mock rooms data');
+      const mockRooms = generateMockRooms(2);
+      
+      // Add our debug room to the list if enabled
+      if (DEBUG_ROOM.enabled) {
+        mockRooms.unshift({
+          id: DEBUG_ROOM.roomId,
+          name: DEBUG_ROOM.roomName,
+          code: 'DEBUG',
+          creator_fid: DEBUG_ROOM.creatorFid,
+          active: true,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          participants_count: DEBUG_ROOM.participantCount
+        });
+      }
+      
+      return { limit: 10, data: mockRooms };
+    }
+    
+    // Regular API call
     const response = await fetch(`${this.baseUrl}/rooms`);
     if (!response.ok) {
       const error = await response.json();
@@ -28,6 +53,14 @@ class ApiService {
    * @returns {Promise<Object>} - Server response with room data
    */
   async createRoom(address, fid) {
+    // Use mock data in debug mode
+    if (DEBUG_MODE) {
+      console.log('[DEBUG] Creating mock room');
+      const mockRoom = generateMockRoom(`debug-room-created-${Date.now()}`, 'New Debug Room', fid);
+      return { room: mockRoom, token: 'mock-token-for-debugging' };
+    }
+    
+    // Regular API call
     const response = await fetch(`${this.baseUrl}/create-room`, {
       method: 'POST',
       headers: {
@@ -50,6 +83,24 @@ class ApiService {
    * @returns {Promise<Object>} - Server response with join data
    */
   async joinRoom(roomId, fid, address) {
+    // Use mock data in debug mode
+    if (DEBUG_MODE) {
+      console.log('[DEBUG] Joining mock room:', roomId);
+      
+      // If joining our specific debug room, return that
+      if (DEBUG_ROOM.enabled && roomId === DEBUG_ROOM.roomId) {
+        return { 
+          room: this.mockDebugRoom,
+          token: 'mock-token-for-debugging'
+        };
+      }
+      
+      // Otherwise generate a generic mock room
+      const mockRoom = generateMockRoom(roomId, `Room ${roomId}`, '12345');
+      return { room: mockRoom, token: 'mock-token-for-debugging' };
+    }
+    
+    // Regular API call
     const response = await fetch(`${this.baseUrl}/join-room`, {
       method: 'POST',
       headers: {
@@ -73,6 +124,24 @@ class ApiService {
    */
   async disableRoom(roomId, address, fid) {
     console.log('API call to disable room with params:', {roomId, address, fid});
+    
+    // Use mock data in debug mode
+    if (DEBUG_MODE) {
+      console.log('[DEBUG] Disabling mock room:', roomId);
+      
+      // Trigger room disabled event
+      try {
+        const roomDisabledEvent = new CustomEvent('roomDisabled', {
+          detail: { roomId, disabledBy: fid }
+        });
+        window.dispatchEvent(roomDisabledEvent);
+        console.log('[DEBUG] Room disabled event dispatched');
+      } catch (eventError) {
+        console.warn('Failed to dispatch room disabled event:', eventError);
+      }
+      
+      return { success: true, message: 'Mock room disabled' };
+    }
     
     // Format the data according to the server expectations
     const requestData = {

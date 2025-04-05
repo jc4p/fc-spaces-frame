@@ -1,10 +1,11 @@
-import { DOM_IDS } from './config.js';
+import { DOM_IDS, DEBUG_MODE } from './config.js';
 import apiService from './services/apiService.js';
 import farcasterService from './services/farcasterService.js';
 import userService from './services/userService.js';
 import { checkMicrophonePermission, setMicrophonePermission, unlockIOSAudio, isIOSBrowser } from './utils/audioUtils.js';
 import RoomsList from './components/roomsList.js';
 import Conference from './components/conference.js';
+import debugHelper from './utils/debugHelper.js';
 
 // Make API service globally available for backward compatibility
 window.apiService = apiService;
@@ -45,6 +46,11 @@ class App {
         console.log('iOS device detected, will unlock audio on user interaction');
       }
       
+      // Initialize debug helper if in debug mode
+      if (DEBUG_MODE) {
+        debugHelper.init();
+      }
+      
       // Set up event listeners
       this.setupEventListeners();
       
@@ -57,7 +63,7 @@ class App {
         
         if (user?.fid) {
           // Fetch user profile from Neynar
-          let userProfile = null;
+  let userProfile = null;
           try {
             userProfile = await userService.fetchUserProfile(user.fid);
             console.log('Fetched user profile:', userProfile);
@@ -92,14 +98,14 @@ class App {
             console.warn('Could not get wallet address:', walletError);
           }
         }
-      } catch (error) {
+  } catch (error) {
         console.error('Farcaster initialization failed:', error);
       }
       
       // Initialize the rooms list
       this.roomsList.init();
       
-    } catch (error) {
+  } catch (error) {
       console.error('App initialization failed:', error);
     }
   }

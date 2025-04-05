@@ -67,6 +67,9 @@ class Modals {
     // Remove hide class to show modal
     modal.classList.remove('hide');
     
+    // Ensure display is set to flex
+    modal.style.display = 'flex';
+    
     // Call onShow callback if provided
     if (options.onShow && typeof options.onShow === 'function') {
       options.onShow(modal);
@@ -88,6 +91,9 @@ class Modals {
     
     // Add hide class to hide modal
     modal.classList.add('hide');
+    
+    // Set display to none
+    modal.style.display = 'none';
     
     // Call onHide callback if provided
     if (options.onHide && typeof options.onHide === 'function') {
@@ -147,23 +153,52 @@ class Modals {
       modal = document.createElement('div');
       modal.id = id;
       modal.className = 'modal hide';
+      modal.style.position = 'fixed';
+      modal.style.top = '0';
+      modal.style.left = '0';
+      modal.style.width = '100%';
+      modal.style.height = '100%';
+      modal.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
+      modal.style.zIndex = '1000';
+      modal.style.display = 'flex';
+      modal.style.alignItems = 'center';
+      modal.style.justifyContent = 'center';
       
       // Create modal content
       const modalContainer = document.createElement('div');
       modalContainer.className = 'modal-container';
+      modalContainer.style.backgroundColor = '#1a1a22';
+      modalContainer.style.borderRadius = '8px';
+      modalContainer.style.width = '90%';
+      modalContainer.style.maxWidth = '400px';
+      modalContainer.style.boxShadow = '0 4px 20px rgba(0, 0, 0, 0.3)';
+      modalContainer.style.overflow = 'hidden';
       
       // Header
       const modalHeader = document.createElement('div');
       modalHeader.className = 'modal-header';
+      modalHeader.style.padding = '15px';
+      modalHeader.style.borderBottom = '1px solid #2a2a35';
+      modalHeader.style.display = 'flex';
+      modalHeader.style.justifyContent = 'space-between';
+      modalHeader.style.alignItems = 'center';
       
       const modalTitle = document.createElement('h3');
       modalTitle.className = 'modal-title';
       modalTitle.innerHTML = title;
+      modalTitle.style.margin = '0';
+      modalTitle.style.color = 'white';
+      modalTitle.style.fontSize = '18px';
       
       const closeButton = document.createElement('button');
       closeButton.className = 'close-button';
       closeButton.dataset.modal = id;
       closeButton.innerHTML = '&times;';
+      closeButton.style.background = 'none';
+      closeButton.style.border = 'none';
+      closeButton.style.color = 'white';
+      closeButton.style.fontSize = '24px';
+      closeButton.style.cursor = 'pointer';
       closeButton.addEventListener('click', () => this.hideModal(id));
       
       modalHeader.appendChild(modalTitle);
@@ -173,15 +208,39 @@ class Modals {
       const modalContent = document.createElement('div');
       modalContent.className = 'modal-content';
       modalContent.innerHTML = content;
+      modalContent.style.padding = '15px';
+      modalContent.style.color = 'white';
       
       // Footer with buttons
       const modalFooter = document.createElement('div');
       modalFooter.className = 'modal-footer';
+      modalFooter.style.padding = '15px';
+      modalFooter.style.display = 'flex';
+      modalFooter.style.justifyContent = 'flex-end';
+      modalFooter.style.gap = '10px';
+      modalFooter.style.borderTop = '1px solid #2a2a35';
       
       buttons.forEach(button => {
         const btn = document.createElement('button');
         btn.className = button.class || 'btn-primary';
         btn.textContent = button.text;
+        btn.style.padding = '8px 15px';
+        btn.style.borderRadius = '4px';
+        btn.style.cursor = 'pointer';
+        btn.style.border = 'none';
+        btn.style.fontSize = '14px';
+        
+        // Apply specific styles based on the button class
+        if (button.class === 'btn-primary') {
+          btn.style.backgroundColor = '#3662e3';
+          btn.style.color = 'white';
+        } else if (button.class === 'btn-secondary') {
+          btn.style.backgroundColor = '#2a2a35';
+          btn.style.color = 'white';
+        } else if (button.class === 'btn-danger') {
+          btn.style.backgroundColor = '#e53935';
+          btn.style.color = 'white';
+        }
         
         if (button.onClick) {
           btn.addEventListener('click', button.onClick);
@@ -220,6 +279,8 @@ class Modals {
    * @param {Function} [options.onCancel] - Function to call when canceled
    * @param {string} [options.confirmText='Confirm'] - Text for confirm button
    * @param {string} [options.cancelText='Cancel'] - Text for cancel button
+   * @param {string} [options.confirmClass='btn-primary'] - CSS class for confirm button
+   * @param {string} [options.cancelClass='btn-secondary'] - CSS class for cancel button
    * @returns {HTMLElement} - The created modal element
    */
   showConfirmation({ 
@@ -228,7 +289,9 @@ class Modals {
     onConfirm, 
     onCancel, 
     confirmText = 'Confirm', 
-    cancelText = 'Cancel' 
+    cancelText = 'Cancel',
+    confirmClass = 'btn-primary',
+    cancelClass = 'btn-secondary'
   }) {
     const modalId = 'confirmation-modal';
     
@@ -236,7 +299,7 @@ class Modals {
     const buttons = [
       {
         text: cancelText,
-        class: 'btn-secondary',
+        class: cancelClass,
         onClick: () => {
           this.hideModal(modalId);
           if (onCancel) onCancel();
@@ -244,7 +307,7 @@ class Modals {
       },
       {
         text: confirmText,
-        class: 'btn-primary',
+        class: confirmClass,
         onClick: () => {
           this.hideModal(modalId);
           if (onConfirm) onConfirm();

@@ -78,7 +78,6 @@
       <div class="spaces-container">
         <div class="spaces-header">
           <div class="room-info">
-            <h3 id="room-title">Audio Room</h3>
             <div class="room-status">
               <span class="live-indicator">LIVE</span>
               <span id="room-duration">00:00</span>
@@ -90,13 +89,12 @@
                 <path d="M18 8C19.6569 8 21 6.65685 21 5C21 3.34315 19.6569 2 18 2C16.3431 2 15 3.34315 15 5C15 5.12548 15.0077 5.24917 15.0227 5.37063L8.08509 9.04413C7.54346 8.40222 6.8089 8 6 8C4.34315 8 3 9.34315 3 11C3 12.6569 4.34315 14 6 14C6.8089 14 7.54346 13.5978 8.08509 12.9559L15.0227 16.6294C15.0077 16.7508 15 16.8745 15 17C15 18.6569 16.3431 20 18 20C19.6569 20 21 18.6569 21 17C21 15.3431 19.6569 14 18 14C17.1911 14 16.4565 14.4022 15.9149 15.0441L8.97733 11.3706C8.99229 11.2492 9 11.1255 9 11C9 10.8745 8.99229 10.7508 8.97733 10.6294L15.9149 6.95587C16.4565 7.59778 17.1911 8 18 8Z" fill="currentColor"/>
               </svg>
             </button>
-            <button id="leave-room-btn" class="btn-danger-small">Leave</button>
           </div>
         </div>
         
         <div class="spaces-content">
           <div class="speakers-section">
-            <h4>Speakers</h4>
+            <h3 id="room-title">Audio Room</h3>
             <div id="speakers-list" class="speakers-list"></div>
           </div>
           
@@ -109,7 +107,7 @@
     </div>
 
     <div id="controls" class="control-bar hide">
-      <button id="mute-aud" class="btn-control">
+      <button id="mute-audio" class="btn-control">
         <svg class="mic-icon" width="24" height="24" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
           <!-- Microphone body -->
           <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" 
@@ -120,14 +118,13 @@
         </svg>
         <span>Mute</span>
       </button>
+
+      <div id="viewer-controls" class="viewer-controls">
+        <button id="leave-room-btn" class="btn-danger-small">Leave</button>
+      </div>
       
       <div id="host-controls" class="host-controls hide">
-        <button id="end-room" class="btn-control danger">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M10.5858 12L4.92893 17.6569C4.53841 18.0474 4.53841 18.6805 4.92893 19.0711C5.31946 19.4616 5.95262 19.4616 6.34315 19.0711L12 13.4142L17.6569 19.0711C18.0474 19.4616 18.6805 19.4616 19.0711 19.0711C19.4616 18.6805 19.4616 18.0474 19.0711 17.6569L13.4142 12L19.0711 6.34315C19.4616 5.95262 19.4616 5.31946 19.0711 4.92893C18.6805 4.53841 18.0474 4.53841 17.6569 4.92893L12 10.5858L6.34315 4.92893C5.95262 4.53841 5.31946 4.53841 4.92893 4.92893C4.53841 5.31946 4.53841 5.95262 4.92893 6.34315L10.5858 12Z" fill="currentColor"/>
-          </svg>
-          <span>End Room</span>
-        </button>
+        <button id="end-room" class="btn-danger-small">End Room</button>
       </div>
     </div>
     

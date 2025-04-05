@@ -69,6 +69,22 @@ class RoomsList {
         }
       });
     });
+    
+    // Listen for debug join room event
+    document.addEventListener('debugJoinRoom', (event) => {
+      console.log('[DEBUG] Received debugJoinRoom event:', event.detail);
+      
+      // Create a fake room item to simulate clicking on a room
+      const roomId = event.detail.roomId;
+      
+      // Call apiService.joinRoom directly
+      const fid = farcasterService.getUserFid() || '12345'; // Use default FID if none found
+      const ethAddressInput = document.getElementById(DOM_IDS.ETH_ADDRESS_INPUT);
+      const address = ethAddressInput?.value || '0x0000000000000000000000000000000000000000';
+      
+      // Call our join room handler
+      this.handleDebugJoinRoom(roomId, fid, address);
+    });
   }
 
   /**
@@ -170,7 +186,7 @@ class RoomsList {
               <div class="room-details">
                 <span class="live-badge">LIVE</span>
                 ${createdAt ? `<span class="created-at">${createdAt}</span>` : ''}
-                <span class="listeners-info">${isCurrentUserRoom ? 'Join as Speaker (Your Room)' : 'Join as Listener'}</span>
+                <span class="listeners-info">${isCurrentUserRoom ? 'Your Room' : 'Join as Listener'}</span>
                 ${room.participant_count !== undefined ? `<span class="participant-count">${room.participant_count} ${room.participant_count === 1 ? 'person' : 'people'}</span>` : ''}
               </div>
             </div>
@@ -667,6 +683,98 @@ class RoomsList {
       // Reset button
       event.target.disabled = false;
       event.target.textContent = 'Join Room';
+    }
+  }
+
+  /**
+   * Handle direct debug room join without UI elements
+   * @param {string} roomId - The room ID to join
+   * @param {string} fid - The user's Farcaster ID
+   * @param {string} address - The user's ETH address
+   */
+  async handleDebugJoinRoom(roomId, fid, address) {
+    console.log('[DEBUG] Directly joining debug room:', roomId);
+    
+    try {
+      // Show joining indicator
+      showSuccessMessage('Joining debug room...');
+      
+      // Get response from API
+      const response = await apiService.joinRoom(roomId, fid, address);
+      console.log('[DEBUG] Join room response:', response);
+      
+      // Save the room ID to HMS service
+      hmsService.setCurrentRoomId(roomId);
+      
+      // Determine if user is creator
+      const isCreator = false; // Debug users are never creators
+      
+      // Store expected role in hidden input for debugging
+      const expectedRoleInput = document.getElementById('expected-role') || 
+                              document.createElement('input');
+      expectedRoleInput.id = 'expected-role';
+      expectedRoleInput.type = 'hidden';
+      expectedRoleInput.value = HMS_ROLES.VIEWER; // Always join as viewer in debug mode
+      document.body.appendChild(expectedRoleInput);
+      
+      // Join room using HMS service
+      await hmsService.joinAsViewer({
+        roomCode: 'DEBUG',
+        userName: 'Debug User',
+        metaData: {
+          fid: fid,
+          isCreator: isCreator,
+          address: address,
+          profile: null
+        }
+      });
+      
+      console.log('[DEBUG] Successfully joined debug room');
+      
+      // IMPORTANT: Update UI visibility AFTER successful join
+      // Hide rooms list and show conference UI
+      if (this.roomsList) {
+        this.roomsList.style.display = 'none';
+      }
+      
+      const conference = document.getElementById(DOM_IDS.CONFERENCE);
+      if (conference) {
+        conference.style.display = 'block';
+      }
+      
+      // Update the room title with the debug room name
+      const roomTitle = document.getElementById(DOM_IDS.ROOM_TITLE);
+      if (roomTitle) {
+        roomTitle.textContent = 'Debug Room';
+      }
+      
+      // Important: Manually trigger any conference UI update functions
+      // Dispatch a custom event that the Conference component can listen for
+      const conferenceUpdateEvent = new CustomEvent('debugRoomJoined', {
+        detail: { roomId, participants: response.room.participants }
+      });
+      document.dispatchEvent(conferenceUpdateEvent);
+      
+      // Give HMS service time to initialize in debug mode
+      setTimeout(() => {
+        // Force refresh peers in Conference UI if needed
+        const refreshEvent = new CustomEvent('refreshConferenceUI');
+        document.dispatchEvent(refreshEvent);
+      }, 1000);
+      
+    } catch (error) {
+      console.error('[DEBUG] Failed to join debug room:', error);
+      showErrorMessage('Failed to join debug room: ' + error.message);
+      
+      // Show rooms list and hide conference UI on error
+      if (this.roomsList) {
+        this.roomsList.style.display = 'block';
+      }
+      
+      const conference = document.getElementById(DOM_IDS.CONFERENCE);
+      if (conference) {
+        conference.style.display = 'none';
+      }
     }
   }
 

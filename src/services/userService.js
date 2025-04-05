@@ -68,9 +68,19 @@ class UserService {
    */
   getDisplayName(peer) {
     try {
+      // Support for mock peers in debug mode
+      if (peer.displayName) {
+        return peer.displayName;
+      }
+      
+      if (peer.username) {
+        return peer.username;
+      }
+      
       // Try to extract from metadata first
       if (peer.metadata) {
-        const metadata = JSON.parse(peer.metadata);
+        // Handle both string and object metadata
+        const metadata = typeof peer.metadata === 'string' ? JSON.parse(peer.metadata) : peer.metadata;
         if (metadata.profile?.username) {
           return metadata.profile.username;
         }
@@ -104,8 +114,18 @@ class UserService {
    */
   getProfileFromPeer(peer) {
     try {
+      // Support for mock peers in debug mode
+      if (peer.displayName && peer.pfp) {
+        return {
+          username: peer.username || peer.displayName,
+          displayName: peer.displayName,
+          pfpUrl: peer.pfp
+        };
+      }
+      
       if (peer.metadata) {
-        const metadata = JSON.parse(peer.metadata);
+        // Handle both string and object metadata
+        const metadata = typeof peer.metadata === 'string' ? JSON.parse(peer.metadata) : peer.metadata;
         return metadata.profile || null;
       }
     } catch (e) {

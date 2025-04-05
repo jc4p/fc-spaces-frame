@@ -19,6 +19,18 @@ export const ROOM_REFRESH_INTERVAL = 30000; // 30 seconds
 // Debug mode
 export const DEBUG_MODE = false;
 
+// Debug room settings
+export const DEBUG_ROOM = {
+  enabled: false,
+  roomId: 'debug-room-123',
+  roomName: 'Debug Room',
+  creatorFid: '12345',
+  creatorName: 'Debug Creator',
+  participantCount: 37,
+  createdAt: new Date().toISOString(),
+  active: true
+};
+
 // Speaking detection threshold
 export const SPEAKING_THRESHOLD = 0.05;
 
@@ -43,7 +55,9 @@ export const DOM_IDS = {
   ROOMS_LIST: "rooms-list",
   CONFERENCE: "conference",
   LEAVE_BTN: "leave-room-btn",
-  MUTE_AUDIO: "mute-aud",
+  MUTE_AUDIO: "mute-audio",
+  VIEWER_CONTROLS: "viewer-controls",
+  HOST_CONTROLS: "host-controls",
   CONTROLS: "controls",
   NAME_INPUT: "name",
   ROOM_TITLE: "room-title",
