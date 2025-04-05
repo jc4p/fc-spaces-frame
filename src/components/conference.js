@@ -783,9 +783,6 @@ class Conference {
         isCreator = true;
       }
       
-      // Add a data attribute to identify creators for click handling
-      const creatorAttr = isCreator ? 'data-is-creator="true"' : '';
-      
       // Check if we have a profile picture
       let hasPfp = false;
       let pfpUrl = '';
@@ -838,9 +835,8 @@ class Conference {
       });
     }
     
-    // Add avatar click handlers for profile viewing ONLY IF the local user is NOT a creator
     if (!userIsCreator) {
-      document.querySelectorAll('.speaker-item:not([data-is-creator="true"]) .avatar').forEach(avatar => {
+      document.querySelectorAll('.speaker-item .avatar').forEach(avatar => {
         avatar.addEventListener('click', this.handleAvatarClick.bind(this));
       });
     }
