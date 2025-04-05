@@ -472,10 +472,16 @@ form h2,
   margin-bottom: 24px;
 }
 
+.listener-avatar img {
+  width: 60px;
+  height: 60px;
+}
+
 .listener-avatar, .modal .listener-avatar {
   width: 60px;
   height: 60px;
   border-radius: 50%;
+  object-fit: contain;
   background-color: var(--accent-color);
   display: flex;
   align-items: center;
