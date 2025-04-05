@@ -29,6 +29,10 @@ class Conference {
     this.muteAudio = document.getElementById(DOM_IDS.MUTE_AUDIO);
     this.endRoomBtn = document.getElementById(DOM_IDS.END_ROOM_BTN);
     this.leaveBtn = document.getElementById(DOM_IDS.LEAVE_BTN);
+    this.raiseHandBtn = document.getElementById(DOM_IDS.RAISE_HAND_BTN);
+    this.emojiReactionBtn = document.getElementById(DOM_IDS.EMOJI_REACTION_BTN);
+    this.emojiReactionModal = document.getElementById(DOM_IDS.EMOJI_REACTION_MODAL);
+    this.emojiContainer = document.getElementById(DOM_IDS.EMOJI_CONTAINER);
     this.conferenceEl = document.getElementById(DOM_IDS.CONFERENCE);
     this.controls = document.getElementById(DOM_IDS.CONTROLS);
     this.listenerActionModal = document.getElementById(DOM_IDS.LISTENER_ACTION_MODAL);
@@ -66,6 +70,16 @@ class Conference {
       this.leaveBtn.addEventListener('click', this.handleLeaveRoom.bind(this));
     }
     
+    // Raise hand button
+    if (this.raiseHandBtn) {
+      this.raiseHandBtn.addEventListener('click', this.handleRaiseHand.bind(this));
+    }
+    
+    // Emoji reaction button
+    if (this.emojiReactionBtn) {
+      this.emojiReactionBtn.addEventListener('click', this.handleEmojiReactionClick.bind(this));
+    }
+    
     // Promote listener button
     if (this.promoteListenerBtn) {
       this.promoteListenerBtn.addEventListener('click', this.handlePromoteListener.bind(this));
@@ -90,11 +104,25 @@ class Conference {
       });
     });
     
+    // Add click handlers for emoji buttons
+    document.querySelectorAll('.emoji-btn').forEach(button => {
+      button.addEventListener('click', this.handleEmojiSelected.bind(this));
+    });
+    
     // Listen for debug events
     document.addEventListener('debugRoomJoined', this.handleDebugRoomJoined.bind(this));
     document.addEventListener('refreshConferenceUI', this.handleRefreshUI.bind(this));
     document.addEventListener('debugSpeakingUpdate', this.handleDebugSpeakingUpdate.bind(this));
     document.addEventListener('debugLeaveRoom', this.handleDebugLeaveRoom.bind(this));
+    
+    // Listen for hand raise events
+    document.addEventListener('hand-raise-changed', this.handleHandRaiseChanged.bind(this));
+    
+    // Listen for emoji reaction events
+    document.addEventListener('emoji-reaction', this.handleEmojiReaction.bind(this));
+    
+    // Listen for emoji cooldown complete events
+    document.addEventListener('emoji-cooldown-complete', this.handleEmojiCooldownComplete.bind(this));
     
     // Fix listeners list layout
     this.fixListenersListLayout();
@@ -476,63 +504,57 @@ class Conference {
   }
   
   /**
-   * Handle promote listener button click
+   * Handle promoting listener to speaker
    */
   async handlePromoteListener() {
     const selectedPeerId = hmsService.getSelectedPeerId();
-    if (!selectedPeerId) return;
-    
-    const localPeer = hmsService.store.getState(selectLocalPeer);
-    
-    // Verify user is a streamer
-    if (localPeer?.roleName !== HMS_ROLES.STREAMER) {
-      showErrorMessage('Only streamers can manage participants');
-      return;
-    }
-    
-    // Verify user is the room creator
-    if (!hmsService.isRoomCreator()) {
-      showErrorMessage('Only the room creator can promote listeners to speakers');
+    if (!selectedPeerId) {
+      console.warn('No peer selected for promotion');
       return;
     }
     
     try {
-      // Get the peer object before we change their role
-      const peers = hmsService.store.getState(selectPeers);
-      const targetPeer = peers.find(peer => peer.id === selectedPeerId);
-      
-      if (!targetPeer) {
-        throw new Error('Selected peer not found');
+      const localPeer = hmsService.getLocalPeer();
+      if (!localPeer) {
+        console.warn('No local peer found');
+        return;
       }
       
-      console.log('Promoting listener to speaker:', targetPeer.name);
-      
-      // First ensure the user is unmuted so they can talk after promotion
-      try {
-        // This ensures the user's audio track is enabled
-        await hmsService.setRemoteTrackEnabled(targetPeer.audioTrack, true);
-        console.log('Enabled remote audio track for promoted user');
-      } catch (audioError) {
-        console.warn('Failed to enable audio track, continuing with role change:', audioError);
+      // Is the user authorized to promote listeners?
+      if (!hmsService.isRoomCreator()) {
+        showErrorMessage('Only the room creator can promote listeners to speakers.');
+        return;
       }
-      
-      // Change role
-      await hmsService.changeRole(selectedPeerId, HMS_ROLES.STREAMER);
       
       // Close the modal
       this.listenerActionModal.classList.add('hide');
+      
+      // Show loading UI
+      this.promoteListenerBtn.textContent = 'Promoting...';
+      this.promoteListenerBtn.disabled = true;
+      
+      // Change the role of the peer
+      await hmsService.changeRole(selectedPeerId, HMS_ROLES.STREAMER);
+      
+      // Reset the button state
+      this.promoteListenerBtn.textContent = 'Invite to Speak';
+      this.promoteListenerBtn.disabled = false;
+      
+      // Clear the selected peer ID
       hmsService.clearSelectedPeerId();
       
-      // Show success message to room creator
-      showSuccessMessage('Successfully promoted to speaker! They can now talk in the room.');
+      // Show success message
+      showSuccessMessage('Listener has been promoted to speaker');
       
-      // Force refresh the peer list to update UI
+      // Re-render the UI
       setTimeout(() => {
         this.renderPeers();
-      }, 1000);
+      }, 500);
     } catch (error) {
-      console.error('Failed to promote listener:', error);
-      showErrorMessage('Failed to promote listener: ' + error.message);
+      console.error('Error promoting listener:', error);
+      this.promoteListenerBtn.textContent = 'Invite to Speak';
+      this.promoteListenerBtn.disabled = false;
+      showErrorMessage('Failed to promote listener. Please try again.');
     }
   }
   
@@ -742,6 +764,22 @@ class Conference {
       const isHost = true; // All speakers are hosts in this app
       const isSpeaking = speaker.isSpeaking || hmsService.isPeerSpeaking(speaker.id);
       
+      // Check if this speaker is the room creator
+      let isCreator = false;
+      try {
+        if (speaker.metadata) {
+          const metadata = typeof speaker.metadata === 'string' ? JSON.parse(speaker.metadata) : speaker.metadata;
+          isCreator = metadata.isCreator === true;
+        }
+      } catch (e) {
+        console.warn('Error parsing peer metadata:', e);
+      }
+      
+      // Also check if this is the local peer and we know we're the creator
+      if (isLocal && userIsCreator) {
+        isCreator = true;
+      }
+      
       // Check if we have a profile picture
       let hasPfp = false;
       let pfpUrl = '';
@@ -763,11 +801,22 @@ class Conference {
       // Only show interaction hint for non-local peers if user is creator
       const showInteractionHint = !isLocal && userIsCreator;
       
+      // Determine avatar classes - with-image class now controls overflow:hidden
+      const avatarClasses = [
+        'avatar',
+        hasPfp ? 'with-image' : '',
+        isSpeaking ? 'speaking' : ''
+      ].filter(Boolean).join(' ');
+      
+      // Use crown for creator, star for regular speakers
+      const hostBadgeContent = isCreator ? '👑' : '★';
+      const hostBadgeClass = isCreator ? 'host-badge creator-badge' : 'host-badge';
+      
       return `
         <div class="speaker-item" data-peer-id="${speaker.id}" data-role="${speaker.roleName || speaker.role || HMS_ROLES.STREAMER}" title="${userIsCreator && !isLocal ? 'Click to manage this speaker' : ''}">
-          <div class="avatar${hasPfp ? ' with-image' : ''}${isSpeaking ? ' speaking' : ''}">
+          <div class="${avatarClasses}">
             ${avatarContent}
-            ${isHost ? '<div class="avatar-badge host-badge">★</div>' : ''}
+            ${isHost ? `<div class="avatar-badge ${hostBadgeClass}">${hostBadgeContent}</div>` : ''}
             ${showMuteBadge ? '<div class="avatar-badge muted-badge">🔇</div>' : ''}
           </div>
           <div class="avatar-name">${displayName}${isLocal ? ' (You)' : ''}</div>
@@ -797,6 +846,11 @@ class Conference {
    * @param {boolean} userIsCreator - Whether local user is the room creator
    */
   renderListenersList(listeners, localPeer, isHost, userIsCreator) {
+    // Get listeners sorted by hand raised status
+    const sortedListeners = hmsService.getSortedPeers().filter(peer => 
+      peer.roleName === HMS_ROLES.VIEWER || peer.role === HMS_ROLES.VIEWER
+    );
+    
     // Add a class to the listeners-list if the user is the creator
     if (userIsCreator) {
       this.listenersList.classList.add('room-creator');
@@ -804,7 +858,7 @@ class Conference {
       this.listenersList.classList.remove('room-creator');
     }
     
-    this.listenersList.innerHTML = listeners.map(listener => {
+    this.listenersList.innerHTML = sortedListeners.map(listener => {
       // Support both real HMS peers and mock peers in debug mode
       const profile = userService.getProfileFromPeer(listener);
       const displayName = userService.getDisplayName(listener);
@@ -821,6 +875,7 @@ class Conference {
       }
       
       const isSpeaking = listener.isSpeaking || hmsService.isPeerSpeaking(listener.id);
+      const isHandRaised = hmsService.isPeerHandRaised(listener.id);
       
       // Check if we have a profile picture
       let hasPfp = false;
@@ -840,14 +895,28 @@ class Conference {
       // Only show mute badge for local user
       const showMuteBadge = isLocal && isMuted;
       
+      // Show hand raised badge if hand is raised
+      const handRaisedBadge = isHandRaised 
+        ? '<div class="hand-raised-badge">✋</div>' 
+        : '';
+      
       // Only show interaction hint for non-local peers if user is creator
       const showInteractionHint = !isLocal && userIsCreator;
       
+      // Determine avatar classes - with-image class now controls overflow:hidden
+      const avatarClasses = [
+        'avatar',
+        'listener-avatar',
+        hasPfp ? 'with-image' : '',
+        isSpeaking ? 'speaking' : ''
+      ].filter(Boolean).join(' ');
+      
       return `
         <div class="listener-item" data-peer-id="${listener.id}" data-role="${listener.roleName || listener.role || HMS_ROLES.VIEWER}" title="${userIsCreator && !isLocal ? 'Click to invite this listener to speak' : ''}">
-          <div class="avatar listener-avatar${hasPfp ? ' with-image' : ''}${isSpeaking ? ' speaking' : ''}">
+          <div class="${avatarClasses}">
             ${avatarContent}
             ${showMuteBadge ? '<div class="avatar-badge muted-badge">🔇</div>' : ''}
+            ${handRaisedBadge}
           </div>
           <div class="avatar-name">${displayName}${isLocal ? ' (You)' : ''}</div>
           ${showInteractionHint ? '<div class="interaction-hint">🎤</div>' : ''}
@@ -1059,6 +1128,332 @@ class Conference {
   handleDebugLeaveRoom() {
     console.log('[DEBUG] Conference received leave room event');
     this.handleConnectionChange(false);
+  }
+  
+  /**
+   * Handle raising hand
+   * @param {Event} event - Click event
+   */
+  async handleRaiseHand(event) {
+    event.preventDefault();
+    
+    try {
+      // Disable the button to prevent multiple clicks
+      this.raiseHandBtn.disabled = true;
+      
+      // Set button to raising state
+      this.raiseHandBtn.innerHTML = '<span>...</span>';
+      
+      // Call the HMS service to raise hand
+      const success = await hmsService.raiseHand();
+      
+      if (success) {
+        this.raiseHandBtn.innerHTML = '<span>✋</span>';
+        showSuccessMessage('Your hand has been raised. If the host sees it, they may invite you to speak.');
+        
+        // The button will be re-enabled when the hand is automatically lowered after 10 seconds
+        // See handleHandRaiseChanged method
+      } else {
+        showErrorMessage('Failed to raise hand. Please try again.');
+        // Re-enable the button
+        this.raiseHandBtn.disabled = false;
+        this.raiseHandBtn.innerHTML = '<span>✋</span>';
+      }
+    } catch (error) {
+      console.error('Error raising hand:', error);
+      showErrorMessage('Failed to raise hand. Please try again.');
+      
+      // Re-enable the button
+      this.raiseHandBtn.disabled = false;
+      this.raiseHandBtn.innerHTML = '<span>✋</span>';
+    }
+  }
+  
+  /**
+   * Handle hand raise changed event
+   * @param {CustomEvent} event - Hand raise changed event
+   */
+  handleHandRaiseChanged(event) {
+    const { peerId, isRaised } = event.detail;
+    
+    // Get the local peer ID
+    const localPeer = hmsService.getLocalPeer();
+    const isLocalPeer = localPeer && localPeer.id === peerId;
+    
+    // Update the raise hand button if this is the local peer
+    if (isLocalPeer) {
+      if (isRaised) {
+        this.raiseHandBtn.innerHTML = '<span>✋</span>';
+        this.raiseHandBtn.disabled = true;
+      } else {
+        // Reset the button to its original state
+        this.raiseHandBtn.disabled = false;
+        this.raiseHandBtn.innerHTML = '<span>✋</span>';
+      }
+    }
+    
+    // Update the listeners list to show hand raised indicator
+    this.updateHandRaisedIndicator(peerId, isRaised);
+    
+    // Don't re-render the entire list, which causes flashing
+    // Instead, handle the sorting manually
+    this.updatePeerOrder();
+  }
+  
+  /**
+   * Update peer order without re-rendering everything
+   * This prevents the flash that would occur with a full re-render
+   */
+  updatePeerOrder() {
+    // Only apply to the listeners list where raised hands appear
+    if (!this.listenersList) return;
+    
+    // Get all listener elements
+    const listenerItems = Array.from(this.listenersList.querySelectorAll('.listener-item'));
+    if (listenerItems.length <= 1) return; // No need to sort if only one or zero listeners
+    
+    // Sort the elements based on hand raised status (raising hands first)
+    listenerItems.sort((a, b) => {
+      const aRaised = a.querySelector('.hand-raised-badge') !== null;
+      const bRaised = b.querySelector('.hand-raised-badge') !== null;
+      
+      if (aRaised && !bRaised) return -1;
+      if (!aRaised && bRaised) return 1;
+      return 0;
+    });
+    
+    // Calculate current positions
+    const positions = listenerItems.map(item => {
+      const rect = item.getBoundingClientRect();
+      return { left: rect.left, top: rect.top };
+    });
+    
+    // First detach all elements and clear event listeners to prevent memory leaks
+    listenerItems.forEach(item => {
+      // Store reference to item's click handlers
+      const clonedItem = item.cloneNode(true);
+      this.listenersList.removeChild(item);
+      
+      // Reattach event handlers for the cloned item
+      const avatar = clonedItem.querySelector('.avatar');
+      if (avatar) {
+        avatar.addEventListener('click', this.handleAvatarClick.bind(this));
+      }
+      
+      // Add peer click handler if user is host
+      const localPeer = hmsService.getLocalPeer();
+      const isHost = localPeer?.roleName === HMS_ROLES.STREAMER || localPeer?.role === HMS_ROLES.STREAMER;
+      if (isHost) {
+        clonedItem.addEventListener('click', this.handlePeerClick.bind(this));
+      }
+      
+      // Append in the new sorted order
+      this.listenersList.appendChild(clonedItem);
+    });
+  }
+  
+  /**
+   * Update hand raised indicator for a specific peer
+   * @param {string} peerId - ID of peer
+   * @param {boolean} isRaised - Whether hand is raised
+   */
+  updateHandRaisedIndicator(peerId, isRaised) {
+    // Find the peer element
+    const peerElement = document.querySelector(`.listener-item[data-peer-id="${peerId}"]`);
+    if (!peerElement) return;
+    
+    // Find the avatar element
+    const avatarElement = peerElement.querySelector('.avatar');
+    if (!avatarElement) return;
+    
+    // Check if there's already a hand raised badge
+    let handRaisedBadge = avatarElement.querySelector('.hand-raised-badge');
+    
+    if (isRaised) {
+      // Add the hand raised badge if it doesn't exist
+      if (!handRaisedBadge) {
+        handRaisedBadge = document.createElement('div');
+        handRaisedBadge.className = 'hand-raised-badge';
+        handRaisedBadge.textContent = '✋';
+        avatarElement.appendChild(handRaisedBadge);
+      }
+    } else {
+      // Remove the hand raised badge if it exists
+      if (handRaisedBadge) {
+        handRaisedBadge.remove();
+      }
+    }
+  }
+  
+  /**
+   * Handle emoji reaction button click
+   * @param {Event} event - Click event
+   */
+  handleEmojiReactionClick(event) {
+    event.preventDefault();
+    
+    // Check if the user is in cooldown
+    const localPeer = hmsService.getLocalPeer();
+    if (localPeer) {
+      const timeoutInfo = hmsService.getEmojiReactionTimeoutInfo(localPeer.id);
+      if (timeoutInfo) {
+        // User is in cooldown, show a message and don't open the modal
+        showErrorMessage(`Please wait ${timeoutInfo.timeLeft} seconds before sending another reaction`);
+        return;
+      }
+    }
+    
+    // Show emoji selection modal
+    this.emojiReactionModal.classList.remove('hide');
+    
+    // Add click-outside listener to close the modal
+    const closeModalOnOutsideClick = (event) => {
+      // Check if the click was outside the modal content
+      if (!event.target.closest('.modal-content') && event.target.classList.contains('modal')) {
+        this.emojiReactionModal.classList.add('hide');
+        document.removeEventListener('click', closeModalOnOutsideClick);
+      }
+    };
+    
+    // Use setTimeout to avoid the current click triggering the handler
+    setTimeout(() => {
+      document.addEventListener('click', closeModalOnOutsideClick);
+    }, 10);
+  }
+  
+  /**
+   * Handle emoji selected from modal
+   * @param {Event} event - Click event
+   */
+  async handleEmojiSelected(event) {
+    const emoji = event.currentTarget.dataset.emoji;
+    
+    // Close the modal
+    this.emojiReactionModal.classList.add('hide');
+    
+    // Send the emoji reaction
+    try {
+      const result = await hmsService.sendEmojiReaction(emoji);
+      
+      if (!result.success) {
+        if (result.error === 'rate_limited') {
+          showErrorMessage(result.message);
+        } else {
+          showErrorMessage('Failed to send reaction. Please try again.');
+        }
+      } else {
+        // Disable the emoji reaction button
+        if (this.emojiReactionBtn) {
+          this.emojiReactionBtn.disabled = true;
+          
+          // Visual indication of cooldown
+          this.emojiReactionBtn.innerHTML = '<span>⏱️</span>';
+          
+          // Reset after timeout
+          setTimeout(() => {
+            if (this.emojiReactionBtn) {
+              this.emojiReactionBtn.disabled = false;
+              this.emojiReactionBtn.innerHTML = '<span>😀</span>';
+            }
+          }, 2000);
+        }
+      }
+    } catch (error) {
+      console.error('Error sending emoji reaction:', error);
+    }
+  }
+  
+  /**
+   * Handle emoji reaction received
+   * @param {CustomEvent} event - Emoji reaction event
+   */
+  handleEmojiReaction(event) {
+    const { emoji, senderId, senderName } = event.detail;
+    
+    // Create a reaction container specific to this peer
+    // This helps organize multiple reactions from different users
+    const senderId_safe = senderId ? senderId.replace(/[^a-zA-Z0-9]/g, '_') : 'unknown';
+    const reactionClass = `reaction-${senderId_safe}`;
+    
+    // Check if this sender already has a container
+    let senderContainer = this.emojiContainer.querySelector(`.${reactionClass}`);
+    
+    // Create sender container if it doesn't exist
+    if (!senderContainer) {
+      senderContainer = document.createElement('div');
+      senderContainer.className = `reaction-container ${reactionClass}`;
+      
+      // Position container randomly along the width of the page
+      // This avoids emojis always appearing from the same position
+      const randomPosition = Math.floor(Math.random() * 85); // 0-85% across the width
+      
+      senderContainer.style.position = 'absolute';
+      senderContainer.style.left = `${randomPosition}%`;
+      senderContainer.style.bottom = '0';
+      senderContainer.style.width = '180px'; // Wider container for more horizontal spread
+      senderContainer.style.height = '500px';
+      senderContainer.style.pointerEvents = 'none';
+      
+      this.emojiContainer.appendChild(senderContainer);
+      
+      // Remove container after animations complete
+      setTimeout(() => {
+        if (senderContainer && senderContainer.parentNode) {
+          senderContainer.remove();
+        }
+      }, 6500);
+    }
+    
+    // Create batch of emojis for the reaction
+    const count = Math.floor(Math.random() * 6) + 6; // 6-11 emojis
+    
+    // Create and add all elements immediately but with different animation delays
+    // This ensures smoother animations by avoiding setTimeout inaccuracies
+    for (let i = 0; i < count; i++) {
+      // Create emoji element
+      const emojiElement = document.createElement('div');
+      emojiElement.className = 'flying-emoji';
+      emojiElement.textContent = emoji;
+      
+      // Calculate random position with better distribution
+      const xOffset = Math.random() * 160 - 80; // -80px to +80px from center
+      emojiElement.style.left = `${xOffset}px`;
+      
+      // Randomize size slightly
+      const size = Math.random() * 15 + 36; // 36-51px (less variation for consistency)
+      emojiElement.style.fontSize = `${size}px`;
+      
+      // Add random rotation amount
+      const rotateAmount = (Math.random() > 0.5 ? 1 : -1) * Math.floor(Math.random() * 20 + 5);
+      emojiElement.style.setProperty('--rotate-amt', `${rotateAmount}deg`);
+      
+      // Set staggered animation delays (more consistent pattern)
+      // Distribute emojis evenly over 400ms for smoother appearance
+      const animDelay = (i / count) * 0.4;
+      emojiElement.style.animationDelay = `${animDelay}s`;
+      
+      // Use consistent animation duration for more predictable movement
+      emojiElement.style.animationDuration = '5s';
+      
+      // Add to container immediately
+      senderContainer.appendChild(emojiElement);
+      
+      // Remove emoji after animation completes
+      setTimeout(() => {
+        if (emojiElement && emojiElement.parentNode) {
+          emojiElement.remove();
+        }
+      }, 5000 + (animDelay * 1000) + 100);
+    }
+  }
+  
+  /**
+   * Handle emoji cooldown complete event
+   * @param {CustomEvent} event - Emoji cooldown complete event
+   */
+  handleEmojiCooldownComplete(event) {
+    console.log('[DEBUG] Conference received emoji cooldown complete event:', event.detail);
+    this.renderPeers();
   }
 }
 

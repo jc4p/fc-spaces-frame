@@ -7,7 +7,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Permissions-Policy" content="microphone=self, camera=self" />
-    <meta name="fc:frame" content='{"version":"next","imageUrl":"https://cover-art.kasra.codes/fc-audio-chat-rectangle.png","button":{"title":"Start Chatting","action":{"type":"launch_frame","name":"FC Audio Chat","url":"http://localhost:5173","splashImageUrl":"https://cover-art.kasra.codes/fc-audio-chat-square.png","splashBackgroundColor":"#6442BF"}}}' />
+    <meta name="fc:frame" content='{"version":"next","imageUrl":"https://cover-art.kasra.codes/fc-audio-chat-rectangle.png","button":{"title":"Start Chatting","action":{"type":"launch_frame","name":"FC Audio Chat","url":"https://fc-audio-chat.kasra.codes","splashImageUrl":"https://cover-art.kasra.codes/fc-audio-chat-square.png","splashBackgroundColor":"#6442BF"}}}' />
   </head>
 
   <body>
@@ -120,6 +120,12 @@
       </button>
 
       <div id="viewer-controls" class="viewer-controls">
+        <button id="emoji-reaction-btn" class="btn-secondary-small">
+          <span>😀</span>
+        </button>
+        <button id="raise-hand-btn" class="btn-secondary-small">
+          <span>✋</span>
+        </button>
         <button id="leave-room-btn" class="btn-danger-small">Leave</button>
       </div>
       
@@ -167,6 +173,30 @@
         </div>
       </div>
     </div>
+
+    <div id="emoji-reaction-modal" class="modal hide">
+      <div class="modal-content emoji-modal-content">
+        <div class="modal-header">
+          <h3>React with emoji</h3>
+          <button class="close-button" data-modal="emoji-reaction-modal">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="emoji-grid">
+            <button class="emoji-btn" data-emoji="👏">👏</button>
+            <button class="emoji-btn" data-emoji="🔥">🔥</button>
+            <button class="emoji-btn" data-emoji="🚀">🚀</button>
+            <button class="emoji-btn" data-emoji="❤️">❤️</button>
+            <button class="emoji-btn" data-emoji="😂">😂</button>
+            <button class="emoji-btn" data-emoji="🤯">🤯</button>
+            <button class="emoji-btn" data-emoji="💯">💯</button>
+            <button class="emoji-btn" data-emoji="👍">👍</button>
+            <button class="emoji-btn" data-emoji="✨">✨</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <div id="emoji-container" class="emoji-container"></div>
 
     <script type="module" src="src/main.js"></script>
   </body>

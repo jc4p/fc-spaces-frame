@@ -9,6 +9,10 @@ import {
   selectIsPeerAudioEnabled,
   selectAudioTrackByPeerID,
   selectPeerAudioByID,
+  selectLocalPeerID,
+  selectHasPeerHandRaised,
+  HMSNotificationTypes,
+  selectBroadcastMessages
 } from "@100mslive/hms-video-store";
 
 import { HMS_ROLES, SPEAKING_THRESHOLD, DELAYS, DEBUG_MODE, DEBUG_ROOM } from '../config.js';
@@ -27,6 +31,15 @@ let speakingUpdateInterval;
 // Debug mode variables
 let debugMockPeers = [];
 let isDebugRoomActive = false;
+
+// Raised hand state
+const raisedHandPeers = new Map();
+const handRaiseTimers = new Map();
+const HAND_RAISE_DURATION = 15000; // 15 seconds
+
+// Emoji reaction rate limiting
+const emojiReactionTimers = new Map();
+const EMOJI_REACTION_TIMEOUT = 2000; // 2 seconds
 
 /**
  * Service for 100ms integration
@@ -53,6 +66,12 @@ class HMSService {
     
     // Set up event listeners
     this.setupEventListeners();
+    
+    // Setup hand raise notifications
+    this.setupHandRaiseNotifications();
+    
+    // Setup message listeners
+    this.setupMessageListeners();
   }
   
   /**
@@ -494,8 +513,18 @@ class HMSService {
    */
   async changeRole(peerId, newRole) {
     try {
+      // Check if going from viewer to streamer (promotion)
+      const peers = this.getPeers();
+      const peer = peers.find(p => p.id === peerId);
+      const isPromotion = peer && peer.roleName === HMS_ROLES.VIEWER && newRole === HMS_ROLES.STREAMER;
+      
       // Use the 100ms SDK to change role directly
       await this.actions.changeRoleOfPeer(peerId, newRole, true);
+      
+      // If this was a promotion and hand was raised, lower it
+      if (isPromotion) {
+        this.lowerHandOnPromotion(peerId);
+      }
     } catch (error) {
       console.error(`Failed to change role to ${newRole}:`, error);
       throw error;
@@ -807,6 +836,441 @@ class HMSService {
     
     // Otherwise check HMS store
     return this.store.getState(selectIsLocalAudioEnabled);
+  }
+
+  /**
+   * Setup notification listeners for hand raise events
+   */
+  setupHandRaiseNotifications() {
+    if (DEBUG_MODE && DEBUG_ROOM.enabled) {
+      // Debug mode doesn't need real HMS notifications
+      return;
+    }
+    
+    // Listen for hand raise notifications
+    this.store.subscribe(notification => {
+      if (notification.type === HMSNotificationTypes.HAND_RAISE_CHANGED) {
+        const peer = notification.data;
+        const isHandRaised = peer.isHandRaised;
+        
+        if (isHandRaised && !peer.isLocal) {
+          // Someone else raised their hand
+          console.log(`${peer.name} raised their hand`);
+          
+          // Show notification to everyone
+          showSuccessMessage(`${peer.name} raised their hand`);
+          
+          // Additional notification to room creator
+          if (this.isRoomCreator()) {
+            // Wait a moment to avoid overlapping notifications
+            setTimeout(() => {
+              showSuccessMessage(`${peer.name} would like to speak. You can invite them by clicking on their profile.`);
+            }, 3000);
+          }
+          
+          // Store the raised hand state
+          raisedHandPeers.set(peer.id, true);
+          
+          // Setup auto-lower timer
+          this.setupHandLowerTimer(peer.id);
+        } else if (!isHandRaised && !peer.isLocal) {
+          // Someone else lowered their hand
+          raisedHandPeers.set(peer.id, false);
+          
+          // Clear any existing timer
+          if (handRaiseTimers.has(peer.id)) {
+            clearTimeout(handRaiseTimers.get(peer.id));
+            handRaiseTimers.delete(peer.id);
+          }
+        }
+        
+        // Trigger a UI update
+        document.dispatchEvent(new CustomEvent('hand-raise-changed', {
+          detail: { peerId: peer.id, isRaised: isHandRaised }
+        }));
+      }
+    }, selectBroadcastMessages);
+  }
+  
+  /**
+   * Setup timer to automatically lower hand after duration
+   * @param {string} peerId - ID of peer whose hand is raised
+   */
+  setupHandLowerTimer(peerId) {
+    // Clear any existing timer
+    if (handRaiseTimers.has(peerId)) {
+      clearTimeout(handRaiseTimers.get(peerId));
+    }
+    
+    // Set new timer
+    const timerId = setTimeout(async () => {
+      // If this is the local peer, lower hand
+      const localPeerId = this.store.getState(selectLocalPeerID);
+      if (peerId === localPeerId) {
+        await this.lowerHand();
+      }
+      
+      // Clear from raised hands map
+      raisedHandPeers.set(peerId, false);
+      handRaiseTimers.delete(peerId);
+      
+      // Trigger a UI update
+      document.dispatchEvent(new CustomEvent('hand-raise-changed', {
+        detail: { peerId, isRaised: false }
+      }));
+    }, HAND_RAISE_DURATION);
+    
+    // Store timer ID
+    handRaiseTimers.set(peerId, timerId);
+  }
+  
+  /**
+   * Raise hand for local peer
+   * @returns {Promise<boolean>} Whether operation was successful
+   */
+  async raiseHand() {
+    try {
+      // Handle debug mode
+      if (DEBUG_MODE && isDebugRoomActive) {
+        console.log('[DEBUG] Raising hand in debug mode');
+        
+        // Find local peer
+        const localPeer = debugMockPeers.find(peer => peer.isLocal);
+        if (!localPeer) return false;
+        
+        // Set hand raised
+        localPeer.isHandRaised = true;
+        raisedHandPeers.set(localPeer.id, true);
+        
+        // Setup auto-lower timer
+        const timerId = setTimeout(() => {
+          localPeer.isHandRaised = false;
+          raisedHandPeers.set(localPeer.id, false);
+          document.dispatchEvent(new CustomEvent('hand-raise-changed', {
+            detail: { peerId: localPeer.id, isRaised: false }
+          }));
+        }, HAND_RAISE_DURATION);
+        
+        handRaiseTimers.set(localPeer.id, timerId);
+        
+        // Notify other peers via our debug handler
+        // Finding peers that aren't the local peer
+        const otherPeers = debugMockPeers.filter(p => p.id !== localPeer.id);
+        if (otherPeers.length > 0) {
+          // For debug mode, just pick a random peer to simulate as having seen the hand raise
+          const randomPeer = otherPeers[Math.floor(Math.random() * otherPeers.length)];
+          this.handleDebugHandRaise(localPeer.id, true);
+        }
+        
+        return true;
+      }
+      
+      // Production mode - use HMS SDK
+      await this.actions.raiseLocalPeerHand();
+      
+      // Get local peer ID
+      const localPeerId = this.store.getState(selectLocalPeerID);
+      
+      // Mark as raised in our local state
+      raisedHandPeers.set(localPeerId, true);
+      
+      // Setup auto-lower timer
+      this.setupHandLowerTimer(localPeerId);
+      
+      return true;
+    } catch (error) {
+      console.error('Error raising hand:', error);
+      return false;
+    }
+  }
+  
+  /**
+   * Lower hand for local peer
+   * @returns {Promise<boolean>} Whether operation was successful
+   */
+  async lowerHand() {
+    try {
+      // Handle debug mode
+      if (DEBUG_MODE && isDebugRoomActive) {
+        console.log('[DEBUG] Lowering hand in debug mode');
+        
+        // Find local peer
+        const localPeer = debugMockPeers.find(peer => peer.isLocal);
+        if (!localPeer) return false;
+        
+        // Set hand lowered
+        localPeer.isHandRaised = false;
+        raisedHandPeers.set(localPeer.id, false);
+        
+        // Clear any existing timer
+        if (handRaiseTimers.has(localPeer.id)) {
+          clearTimeout(handRaiseTimers.get(localPeer.id));
+          handRaiseTimers.delete(localPeer.id);
+        }
+        
+        // Trigger UI update
+        document.dispatchEvent(new CustomEvent('hand-raise-changed', {
+          detail: { peerId: localPeer.id, isRaised: false }
+        }));
+        
+        return true;
+      }
+      
+      // Production mode - use HMS SDK
+      await this.actions.lowerLocalPeerHand();
+      
+      // Get local peer ID
+      const localPeerId = this.store.getState(selectLocalPeerID);
+      
+      // Mark as lowered in our local state
+      raisedHandPeers.set(localPeerId, false);
+      
+      // Clear any existing timer
+      if (handRaiseTimers.has(localPeerId)) {
+        clearTimeout(handRaiseTimers.get(localPeerId));
+        handRaiseTimers.delete(localPeerId);
+      }
+      
+      return true;
+    } catch (error) {
+      console.error('Error lowering hand:', error);
+      return false;
+    }
+  }
+  
+  /**
+   * Check if a peer has their hand raised
+   * @param {string} peerId - ID of peer to check
+   * @returns {boolean} Whether peer has hand raised
+   */
+  isPeerHandRaised(peerId) {
+    // Try from local state first
+    if (raisedHandPeers.has(peerId)) {
+      return raisedHandPeers.get(peerId);
+    }
+    
+    // Handle debug mode
+    if (DEBUG_MODE && isDebugRoomActive) {
+      const peer = debugMockPeers.find(p => p.id === peerId);
+      return peer ? !!peer.isHandRaised : false;
+    }
+    
+    // Use HMS SDK
+    try {
+      return this.store.getState(selectHasPeerHandRaised(peerId)) || false;
+    } catch (error) {
+      console.warn('Error checking hand raised status:', error);
+      return false;
+    }
+  }
+  
+  /**
+   * Get peers sorted with raised hands first
+   * @returns {Array} Sorted list of peers
+   */
+  getSortedPeers() {
+    const peers = this.getPeers();
+    
+    // Sort by hand raised status (raised hands first)
+    return [...peers].sort((a, b) => {
+      const aRaised = this.isPeerHandRaised(a.id);
+      const bRaised = this.isPeerHandRaised(b.id);
+      
+      if (aRaised && !bRaised) return -1;
+      if (!aRaised && bRaised) return 1;
+      return 0;
+    });
+  }
+  
+  /**
+   * Lower hand when promoted to speaker
+   * @param {string} peerId - ID of peer being promoted
+   */
+  lowerHandOnPromotion(peerId) {
+    // If hand was raised, lower it
+    if (this.isPeerHandRaised(peerId)) {
+      // If it's local peer, use the lowerHand method
+      const localPeerId = this.store.getState(selectLocalPeerID);
+      
+      if (peerId === localPeerId) {
+        this.lowerHand();
+      }
+      
+      // Update our local state
+      raisedHandPeers.set(peerId, false);
+      
+      // Clear timer if exists
+      if (handRaiseTimers.has(peerId)) {
+        clearTimeout(handRaiseTimers.get(peerId));
+        handRaiseTimers.delete(peerId);
+      }
+    }
+  }
+
+  /**
+   * Set up message listeners for emoji reactions
+   */
+  setupMessageListeners() {
+    // Set up broadcast message listener
+    this.store.subscribe((messages) => {
+      messages.forEach(message => {
+        // Check if the message is an emoji reaction
+        if (message.type === 'EMOJI_REACTION') {
+          this.handleEmojiReaction(message.message, message.sender);
+        }
+      });
+    }, selectBroadcastMessages);
+  }
+  
+  /**
+   * Handle emoji reaction
+   * @param {string} emoji - The emoji that was sent
+   * @param {Object} sender - The peer who sent the emoji
+   */
+  handleEmojiReaction(emoji, sender) {
+    // Create event for emoji display
+    const event = new CustomEvent('emoji-reaction', {
+      detail: {
+        emoji,
+        senderId: sender?.id,
+        senderName: sender?.name
+      }
+    });
+    
+    // Dispatch event for UI components to handle
+    document.dispatchEvent(event);
+    
+    // Handle debug mode separately
+    if (DEBUG_MODE && isDebugRoomActive) {
+      console.log(`[DEBUG] Emoji reaction received: ${emoji} from ${sender?.name}`);
+    }
+  }
+  
+  /**
+   * Send emoji reaction
+   * @param {string} emoji - The emoji to send
+   * @returns {Promise<boolean|object>} Success indicator or error with timeout info
+   */
+  async sendEmojiReaction(emoji) {
+    try {
+      // Get local peer ID
+      const localPeerId = this.store.getState(selectLocalPeerID) || 
+                         (DEBUG_MODE && isDebugRoomActive ? 
+                           debugMockPeers.find(peer => peer.isLocal)?.id : null);
+      
+      // Check if user is in timeout
+      if (localPeerId && emojiReactionTimers.has(localPeerId)) {
+        const timeLeft = Math.ceil((emojiReactionTimers.get(localPeerId) - Date.now()) / 1000);
+        return { 
+          success: false, 
+          error: 'rate_limited',
+          timeLeft: timeLeft > 0 ? timeLeft : 5, // Failsafe if timer calculation is off
+          message: `Please wait ${timeLeft} seconds before sending another reaction`
+        };
+      }
+      
+      // Handle debug mode
+      if (DEBUG_MODE && isDebugRoomActive) {
+        console.log('[DEBUG] Sending emoji reaction:', emoji);
+        
+        // Find local peer for sender info
+        const localPeer = debugMockPeers.find(peer => peer.isLocal);
+        
+        // Set rate limiting timeout
+        if (localPeer?.id) {
+          emojiReactionTimers.set(localPeer.id, Date.now() + EMOJI_REACTION_TIMEOUT);
+          
+          // Clear timeout after duration
+          setTimeout(() => {
+            emojiReactionTimers.delete(localPeer.id);
+            // Dispatch event to notify UI that cooldown is complete
+            document.dispatchEvent(new CustomEvent('emoji-cooldown-complete', {
+              detail: { peerId: localPeer.id }
+            }));
+          }, EMOJI_REACTION_TIMEOUT);
+        }
+        
+        // Create and dispatch an event with emoji information
+        this.handleEmojiReaction(emoji, localPeer);
+        
+        return { success: true };
+      }
+      
+      // Set rate limiting timeout for production mode
+      if (localPeerId) {
+        emojiReactionTimers.set(localPeerId, Date.now() + EMOJI_REACTION_TIMEOUT);
+        
+        // Clear timeout after duration
+        setTimeout(() => {
+          emojiReactionTimers.delete(localPeerId);
+          // Dispatch event to notify UI that cooldown is complete
+          document.dispatchEvent(new CustomEvent('emoji-cooldown-complete', {
+            detail: { peerId: localPeerId }
+          }));
+        }, EMOJI_REACTION_TIMEOUT);
+      }
+      
+      // Send broadcast message with emoji and type
+      await this.actions.sendBroadcastMessage(emoji, 'EMOJI_REACTION');
+      return { success: true };
+    } catch (error) {
+      console.error('Error sending emoji reaction:', error);
+      return { success: false, error: 'sending_failed', message: error.message };
+    }
+  }
+  
+  /**
+   * Check if user is in emoji reaction timeout
+   * @param {string} peerId - ID of peer to check
+   * @returns {object|null} Timeout info or null if not in timeout
+   */
+  getEmojiReactionTimeoutInfo(peerId) {
+    if (!peerId || !emojiReactionTimers.has(peerId)) {
+      return null;
+    }
+    
+    const timeLeft = Math.ceil((emojiReactionTimers.get(peerId) - Date.now()) / 1000);
+    if (timeLeft <= 0) {
+      emojiReactionTimers.delete(peerId);
+      return null;
+    }
+    
+    return {
+      timeLeft,
+      expiresAt: emojiReactionTimers.get(peerId)
+    };
+  }
+
+  /**
+   * Handle debug hand raise event for local UI
+   * @param {string} peerId - ID of peer who raised hand
+   * @param {boolean} isRaised - Whether hand is raised
+   */
+  handleDebugHandRaise(peerId, isRaised) {
+    // Get peer info
+    const peer = debugMockPeers.find(p => p.id === peerId);
+    if (!peer) return;
+    
+    if (isRaised) {
+      console.log(`[DEBUG] ${peer.name} raised their hand`);
+      
+      // Show notification to everyone
+      showSuccessMessage(`${peer.name} raised their hand`);
+      
+      // Additional notification to room creator if the local peer is the creator
+      const localPeer = debugMockPeers.find(p => p.isLocal);
+      if (localPeer && (localPeer.isCreator || localPeer.metadata?.isCreator)) {
+        // Wait a moment to avoid overlapping notifications
+        setTimeout(() => {
+          showSuccessMessage(`${peer.name} would like to speak. You can invite them by clicking on their profile.`);
+        }, 3000);
+      }
+    }
+    
+    // Dispatch event to update UI
+    document.dispatchEvent(new CustomEvent('hand-raise-changed', {
+      detail: { peerId, isRaised }
+    }));
   }
 }
 

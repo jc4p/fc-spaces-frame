@@ -14,6 +14,22 @@ class DebugHelper {
   }
   
   /**
+   * Initialize debug helper
+   */
+  init() {
+    if (!DEBUG_MODE) return;
+    
+    console.log('[DEBUG] Initializing debug helper');
+    
+    this.setupButtons();
+    this.setupKeyboardShortcuts();
+    this.setupAdditionalDebugFeatures();
+    
+    // Apply any URL params 
+    this.applyUrlParams();
+  }
+  
+  /**
    * Initialize debug mode, adding debug controls if necessary
    */
   init() {
@@ -270,6 +286,20 @@ class DebugHelper {
       const leaveEvent = new CustomEvent('debugLeaveRoom');
       document.dispatchEvent(leaveEvent);
     }
+  }
+
+  /**
+   * Set up additional debug features
+   */
+  setupAdditionalDebugFeatures() {
+    if (!DEBUG_MODE) return;
+    
+    // Add any extra debug features here
+    
+    // Add support for emoji reactions in debug mode
+    document.addEventListener('emoji-reaction', (event) => {
+      console.log('[DEBUG] Emoji reaction received:', event.detail.emoji);
+    });
   }
 }
 

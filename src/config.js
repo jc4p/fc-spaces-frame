@@ -83,5 +83,9 @@ export const DOM_IDS = {
   USER_GREETING: "user-greeting",
   FRAME_STATUS: "frame-status",
   FRAME_NOT_CONNECTED: "frame-not-connected",
-  CREATE_ROOM_ACTIONS: "create-room-actions"
+  CREATE_ROOM_ACTIONS: "create-room-actions",
+  RAISE_HAND_BTN: "raise-hand-btn",
+  EMOJI_REACTION_BTN: "emoji-reaction-btn",
+  EMOJI_REACTION_MODAL: "emoji-reaction-modal",
+  EMOJI_CONTAINER: "emoji-container"
 }; 
