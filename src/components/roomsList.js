@@ -112,6 +112,14 @@ class RoomsList {
    */
   async loadRooms() {
     try {
+      // Show loading state
+      this.roomsContainer.innerHTML = `
+        <div class="loading-state">
+          <div class="loading-spinner"></div>
+          <p>Loading audio rooms...</p>
+        </div>
+      `;
+      
       const { data: rooms } = await apiService.listRooms();
       
       if (!rooms?.length) {
@@ -216,17 +224,30 @@ class RoomsList {
    * Handle refresh rooms button click
    */
   async handleRefreshRooms() {
-    // Show loading state on the button
-    const originalContent = setButtonLoading(this.refreshRoomsBtn, 'Refreshing...');
+    // Add spinning animation to the refresh icon
+    const refreshIcon = this.refreshRoomsBtn.querySelector('svg');
+    if (refreshIcon) {
+      refreshIcon.style.transition = 'transform 0.6s ease-in-out';
+      refreshIcon.style.transform = 'rotate(360deg)';
+      
+      // Reset the transform after animation completes
+      setTimeout(() => {
+        refreshIcon.style.transition = 'none';
+        refreshIcon.style.transform = 'rotate(0deg)';
+        
+        // Re-enable the transition for next time
+        setTimeout(() => {
+          refreshIcon.style.transition = 'transform 0.6s ease-in-out';
+        }, 50);
+      }, 600);
+    }
     
     try {
       await this.loadRooms();
       console.log('Rooms refreshed successfully');
     } catch (error) {
       console.error('Failed to refresh rooms:', error);
-    } finally {
-      // Restore button state after a short delay to ensure loading is visible
-      restoreButton(this.refreshRoomsBtn, originalContent, 500);
+      showErrorMessage('Failed to refresh rooms');
     }
   }
 
@@ -779,10 +800,20 @@ class RoomsList {
   }
 
   /**
-   * Initialize the component
+   * Initialize the rooms list component
    */
   init() {
-    // Load rooms initially
+    // Show loading state immediately
+    if (this.roomsContainer) {
+      this.roomsContainer.innerHTML = `
+        <div class="loading-state">
+          <div class="loading-spinner"></div>
+          <p>Loading audio rooms...</p>
+        </div>
+      `;
+    }
+    
+    // Load rooms
     this.loadRooms();
     
     // Start auto-refresh

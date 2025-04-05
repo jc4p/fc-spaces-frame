@@ -838,10 +838,12 @@ class Conference {
       });
     }
     
-    // Add avatar click handlers ONLY for non-creator avatars
-    document.querySelectorAll('.speaker-item:not([data-is-creator="true"]) .avatar').forEach(avatar => {
-      avatar.addEventListener('click', this.handleAvatarClick.bind(this));
-    });
+    // Add avatar click handlers for profile viewing ONLY IF the local user is NOT a creator
+    if (!userIsCreator) {
+      document.querySelectorAll('.speaker-item:not([data-is-creator="true"]) .avatar').forEach(avatar => {
+        avatar.addEventListener('click', this.handleAvatarClick.bind(this));
+      });
+    }
   }
   
   /**
@@ -956,10 +958,12 @@ class Conference {
       });
     }
     
-    // Add avatar click handlers ONLY for non-creator avatars
-    document.querySelectorAll('.listener-item:not([data-is-creator="true"]) .avatar').forEach(avatar => {
-      avatar.addEventListener('click', this.handleAvatarClick.bind(this));
-    });
+    // Add avatar click handlers for profile viewing ONLY IF the local user is NOT a creator
+    if (!userIsCreator) {
+      document.querySelectorAll('.listener-item:not([data-is-creator="true"]) .avatar').forEach(avatar => {
+        avatar.addEventListener('click', this.handleAvatarClick.bind(this));
+      });
+    }
   }
   
   /**
@@ -1415,46 +1419,29 @@ class Conference {
   handleEmojiReaction(event) {
     const { emoji, senderId, senderName } = event.detail;
     
-    // Create a reaction container specific to this peer
-    // This helps organize multiple reactions from different users
-    const senderId_safe = senderId ? senderId.replace(/[^a-zA-Z0-9]/g, '_') : 'unknown';
-    const reactionClass = `reaction-${senderId_safe}`;
+    // Generate a unique reaction ID that combines the sender and timestamp
+    // This ensures every reaction gets its own container with a unique position
+    const reactionId = `${senderId || 'unknown'}_${Date.now()}`;
+    const reactionClass = `reaction-${reactionId}`;
     
-    // Check if this sender already has a container
-    let senderContainer = this.emojiContainer.querySelector(`.${reactionClass}`);
+    // Always create a new container for each reaction
+    const senderContainer = document.createElement('div');
+    senderContainer.className = `reaction-container ${reactionClass}`;
     
-    // If container exists, clear any existing emojis before adding new ones
-    if (senderContainer) {
-      // Clear all existing emojis from this sender
-      while (senderContainer.firstChild) {
-        senderContainer.removeChild(senderContainer.firstChild);
-      }
-    } else {
-      // Create a new container if one doesn't exist
-      senderContainer = document.createElement('div');
-      senderContainer.className = `reaction-container ${reactionClass}`;
-      
-      // Position container randomly along the width of the page
-      // This avoids emojis always appearing from the same position
-      const randomPosition = Math.floor(Math.random() * 85); // 0-85% across the width
-      
-      senderContainer.style.position = 'absolute';
-      senderContainer.style.left = `${randomPosition}%`;
-      senderContainer.style.bottom = '0';
-      senderContainer.style.width = '180px'; // Wider container for more horizontal spread
-      senderContainer.style.height = '500px';
-      senderContainer.style.pointerEvents = 'none';
-      
-      this.emojiContainer.appendChild(senderContainer);
-    }
+    // Position container randomly along the width of the page
+    // This ensures every batch of emojis appears at a different position
+    const randomPosition = Math.floor(Math.random() * 85); // 0-85% across the width
     
-    // Reset the removal timeout to ensure container stays for the full duration of the new emojis
-    const existingTimeout = senderContainer.dataset.removalTimeout;
-    if (existingTimeout) {
-      clearTimeout(parseInt(existingTimeout));
-    }
+    senderContainer.style.position = 'absolute';
+    senderContainer.style.left = `${randomPosition}%`;
+    senderContainer.style.bottom = '0';
+    senderContainer.style.width = '180px'; // Wider container for more horizontal spread
+    senderContainer.style.height = '500px';
+    senderContainer.style.pointerEvents = 'none';
     
-    // Set new timeout to remove container after animations complete
+    this.emojiContainer.appendChild(senderContainer);
+    
+    // Set timeout to remove container after animations complete
     const removalTimeout = setTimeout(() => {
       if (senderContainer && senderContainer.parentNode) {
         senderContainer.remove();
