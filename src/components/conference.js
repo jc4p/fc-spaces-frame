@@ -617,13 +617,14 @@ class Conference {
       isStreamer,
       controlsHidden: !isStreamer
     });
-    
-    // Never hide controls if expected role is streamer
-    this.controls.classList.toggle('hide', !isStreamer);
-    
+        
     // Also make sure host controls are visible if user should be a streamer
     if (isStreamer) {
       this.hostControls.classList.remove('hide');
+      this.viewerControls.classList.add('hide');
+    } else {
+      this.viewerControls.classList.remove('hide');
+      this.hostControls.classList.add('hide');
     }
   }
   
