@@ -133,12 +133,12 @@ class HMSService {
         });
         
         // Set the dominant speaker as speaking
-        speakingPeers.set(dominantSpeaker.peerId, true);
+        speakingPeers.set(dominantSpeaker.id, true);
         
         // Dispatch an event to notify the conference component
         document.dispatchEvent(new CustomEvent('active-speaker-changed', {
           detail: { 
-            activeSpeakerId: dominantSpeaker.peerId,
+            activeSpeakerId: dominantSpeaker.id, // Use the id property directly instead of peerId
             speakingPeers: Array.from(speakingPeers.entries())
           }
         }));

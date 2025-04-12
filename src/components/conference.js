@@ -472,6 +472,11 @@ class Conference {
       this.activeSenderContainers.clear();
     }
     
+    // Clear recent reactions tracking
+    if (this.recentReactions) {
+      this.recentReactions.clear();
+    }
+    
     // Remove all emoji containers from the DOM
     if (this.emojiContainer) {
       // First remove all flying-emoji elements directly
@@ -1529,11 +1534,33 @@ class Conference {
     if (!this.activeSenderContainers) {
       this.activeSenderContainers = new Map();
     }
+    if (!this.recentReactions) {
+      this.recentReactions = new Map();
+    }
+    
+    // Check if this user has sent a reaction recently (within 6 seconds)
+    const now = Date.now();
+    if (this.recentReactions.has(senderId)) {
+      const lastReactionTime = this.recentReactions.get(senderId);
+      // If we received a reaction from this sender too recently, don't process it
+      if (now - lastReactionTime < 6000) {
+        console.log(`Ignoring duplicate emoji reaction from ${senderId}, too soon after last one`);
+        return;
+      }
+    }
+    
+    // Record this reaction timestamp
+    this.recentReactions.set(senderId, now);
+    
+    // Cleanup old entries occasionally to prevent memory growth
+    if (this.recentReactions.size > 10 || Math.random() < 0.2) { // 20% chance or when size gets large
+      this.cleanupOldReactions();
+    }
     
     // Generate a unique reaction ID for tracking
-    const reactionId = `${senderId}-${Date.now()}`;
+    const reactionId = `${senderId}-${now}`;
     
-    // IMPORTANT: Force cleanup of ALL existing emoji containers from this sender
+    // Force cleanup of existing emoji containers from this sender
     this.cleanupPreviousEmojis(senderId);
     
     // Create a new container with a random position
@@ -1677,6 +1704,23 @@ class Conference {
     // Remove from tracking
     if (this.activeSenderContainers && this.activeSenderContainers.has(senderId)) {
       this.activeSenderContainers.get(senderId).delete(containerId);
+    }
+  }
+  
+  /**
+   * Clean up old reaction timestamp entries to prevent memory growth
+   */
+  cleanupOldReactions() {
+    if (!this.recentReactions || this.recentReactions.size === 0) return;
+    
+    const now = Date.now();
+    const cutoffTime = now - 10000; // Remove entries older than 10 seconds
+    
+    // Remove old entries
+    for (const [senderId, timestamp] of this.recentReactions.entries()) {
+      if (timestamp < cutoffTime) {
+        this.recentReactions.delete(senderId);
+      }
     }
   }
   
