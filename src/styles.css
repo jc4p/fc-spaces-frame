@@ -1135,3 +1135,46 @@ label {
   max-width: 300px;
   margin: 0 auto;
 }
+
+/* Maintenance screen styles */
+.maintenance-screen {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: var(--background-color);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+.maintenance-content {
+  text-align: center;
+  padding: 40px;
+  background-color: var(--surface-color);
+  border-radius: 16px;
+  max-width: 90%;
+  width: 450px;
+  box-shadow: 0px 10px 30px rgba(0, 0, 0, 0.3);
+}
+
+.maintenance-content h2 {
+  font-size: 28px;
+  margin-bottom: 16px;
+  color: var(--text-color);
+}
+
+.maintenance-content p {
+  font-size: 18px;
+  line-height: 1.6;
+  color: var(--secondary-text);
+  margin-bottom: 24px;
+}
+
+.maintenance-icon {
+  font-size: 60px;
+  margin-top: 20px;
+  animation: bounce 1.5s infinite alternate;
+}

@@ -19,6 +19,9 @@ export const ROOM_REFRESH_INTERVAL = 30000; // 30 seconds
 // Debug mode
 export const DEBUG_MODE = false;
 
+// Maintenance mode
+export const MID_CONSTRUCTION = true;
+
 // Debug room settings
 export const DEBUG_ROOM = {
   enabled: false,
@@ -87,5 +90,6 @@ export const DOM_IDS = {
   RAISE_HAND_BTN: "raise-hand-btn",
   EMOJI_REACTION_BTN: "emoji-reaction-btn",
   EMOJI_REACTION_MODAL: "emoji-reaction-modal",
-  EMOJI_CONTAINER: "emoji-container"
+  EMOJI_CONTAINER: "emoji-container",
+  MAINTENANCE_SCREEN: "maintenance-screen"
 }; 

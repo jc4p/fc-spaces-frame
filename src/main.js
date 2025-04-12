@@ -1,4 +1,4 @@
-import { DOM_IDS, DEBUG_MODE } from './config.js';
+import { DOM_IDS, DEBUG_MODE, MID_CONSTRUCTION } from './config.js';
 import apiService from './services/apiService.js';
 import farcasterService from './services/farcasterService.js';
 import userService from './services/userService.js';
@@ -35,6 +35,17 @@ class App {
   async init() {
     try {
       console.log('Initializing Fariscope Frame application');
+
+      // Show maintenance screen if in construction mode
+      if (MID_CONSTRUCTION) {
+        const maintenanceScreen = document.getElementById(DOM_IDS.MAINTENANCE_SCREEN);
+        if (maintenanceScreen) {
+          maintenanceScreen.classList.remove('hide');
+          // Don't initialize anything else when in maintenance mode
+          console.log('App in maintenance mode, showing maintenance screen');
+          return;
+        }
+      }
       
       // Check for microphone permission early
       const hasMicPermission = await checkMicrophonePermission();
