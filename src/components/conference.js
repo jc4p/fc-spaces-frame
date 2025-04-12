@@ -2,10 +2,10 @@ import {
   selectPeers, 
   selectLocalPeer, 
   selectIsLocalAudioEnabled,
-  selectIsConnectedToRoom
+  selectIsConnectedToRoom,
 } from "@100mslive/hms-video-store";
 
-import { DOM_IDS, HMS_ROLES } from '../config.js';
+import { DOM_IDS, HMS_ROLES, USER_ROLES } from '../config.js';
 import hmsService from '../services/hmsService.js';
 import userService from '../services/userService.js';
 import farcasterService from '../services/farcasterService.js';
@@ -40,6 +40,15 @@ class Conference {
     this.listenerName = document.getElementById(DOM_IDS.LISTENER_NAME);
     this.promoteListenerBtn = document.getElementById(DOM_IDS.PROMOTE_LISTENER_BTN);
     this.demoteSpeakerBtn = document.getElementById(DOM_IDS.DEMOTE_SPEAKER_BTN);
+    this.chatBtn = document.getElementById(DOM_IDS.CHAT_BTN);
+    this.chatBadge = document.getElementById(DOM_IDS.CHAT_BADGE);
+    this.chatContainer = document.getElementById(DOM_IDS.CHAT_CONTAINER);
+    this.chatMessages = document.getElementById(DOM_IDS.CHAT_MESSAGES);
+    this.chatInput = document.getElementById(DOM_IDS.CHAT_INPUT);
+    this.chatSendBtn = document.getElementById(DOM_IDS.CHAT_SEND_BTN);
+    this.makeCoHostBtn = document.getElementById(DOM_IDS.MAKE_COHOST_BTN);
+    this.removeCoHostBtn = document.getElementById(DOM_IDS.REMOVE_COHOST_BTN);
+    this.cohostDescription = document.getElementById('cohost-description');
     
     // State variables
     this.currentRoomId = null;
@@ -80,6 +89,26 @@ class Conference {
       this.emojiReactionBtn.addEventListener('click', this.handleEmojiReactionClick.bind(this));
     }
     
+    // Chat button
+    if (this.chatBtn) {
+      this.chatBtn.addEventListener('click', this.handleChatBtnClick.bind(this));
+    }
+    
+    // Chat send button
+    if (this.chatSendBtn) {
+      this.chatSendBtn.addEventListener('click', this.handleChatSend.bind(this));
+    }
+    
+    // Chat input keypress (Enter key)
+    if (this.chatInput) {
+      this.chatInput.addEventListener('keypress', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          this.handleChatSend();
+        }
+      });
+    }
+    
     // Promote listener button
     if (this.promoteListenerBtn) {
       this.promoteListenerBtn.addEventListener('click', this.handlePromoteListener.bind(this));
@@ -90,19 +119,28 @@ class Conference {
       this.demoteSpeakerBtn.addEventListener('click', this.handleDemoteSpeaker.bind(this));
     }
     
+    // Make cohost button
+    if (this.makeCoHostBtn) {
+      this.makeCoHostBtn.addEventListener('click', this.handleMakeCohost.bind(this));
+    }
+    
+    // Remove cohost button
+    if (this.removeCoHostBtn) {
+      this.removeCoHostBtn.addEventListener('click', this.handleRemoveCohost.bind(this));
+    }
+    
     // Close modal buttons
     document.querySelectorAll('.close-button').forEach(button => {
-      button.addEventListener('click', (event) => {
-        // Make sure we stop event propagation to prevent other handlers from firing
-        event.stopPropagation();
-        
-        const modalId = button.dataset.modal;
-        if (modalId) {
-          document.getElementById(modalId).classList.add('hide');
-          hmsService.clearSelectedPeerId();
-        }
-      });
+      // Using bind(this) to preserve the Conference class context
+      button.addEventListener('click', this.handleCloseButtonClick.bind(this));
     });
+    
+    // Add a dedicated method to handle chat close button click
+    this.handleChatClose = () => {
+      this.chatContainer.classList.add('hide');
+      this.isChatOpen = false;
+      console.log('Chat closed with X button, isChatOpen set to:', this.isChatOpen);
+    };
     
     // Add click handlers for emoji buttons
     document.querySelectorAll('.emoji-btn').forEach(button => {
@@ -123,6 +161,15 @@ class Conference {
     
     // Listen for emoji cooldown complete events
     document.addEventListener('emoji-cooldown-complete', this.handleEmojiCooldownComplete.bind(this));
+    
+    // Listen for active speaker changes from HMS
+    document.addEventListener('active-speaker-changed', this.handleActiveSpeakerChange.bind(this));
+    
+    // Listen for chat messages
+    document.addEventListener('chat-message', this.handleChatMessage.bind(this));
+    
+    // Listen for chat cooldown complete
+    document.addEventListener('chat-cooldown-complete', this.handleChatCooldownComplete.bind(this));
     
     // Fix listeners list layout
     this.fixListenersListLayout();
@@ -254,8 +301,6 @@ class Conference {
     
     // Subscribe to connection state
     hmsService.store.subscribe(this.handleConnectionChange.bind(this), selectIsConnectedToRoom);
-    
-    // No need for DOM observers - the HMS store subscription will handle updates
   }
   
   /**
@@ -408,6 +453,38 @@ class Conference {
   }
   
   /**
+   * Clean up all emoji reaction timeouts and containers
+   */
+  cleanupEmojiReactionTimeouts() {
+    // Clear all timeouts
+    if (this.emojiReactionTimeouts) {
+      // Iterate through all sender IDs and clear their timeouts
+      this.emojiReactionTimeouts.forEach((timeouts, senderId) => {
+        timeouts.forEach(timeoutId => clearTimeout(timeoutId));
+      });
+      
+      // Clear the map
+      this.emojiReactionTimeouts.clear();
+    }
+    
+    // Clear all container tracking
+    if (this.activeSenderContainers) {
+      this.activeSenderContainers.clear();
+    }
+    
+    // Remove all emoji containers from the DOM
+    if (this.emojiContainer) {
+      // First remove all flying-emoji elements directly
+      const emojis = this.emojiContainer.querySelectorAll('.flying-emoji');
+      emojis.forEach(emoji => emoji.remove());
+      
+      // Then remove the containers
+      const containers = this.emojiContainer.querySelectorAll('.reaction-container');
+      containers.forEach(container => container.remove());
+    }
+  }
+
+  /**
    * Handle connection state changes
    * @param {boolean} isConnected - Whether connected to a room
    */
@@ -427,6 +504,9 @@ class Conference {
       
       // Start the speaking detection interval
       hmsService.startSpeakingDetection();
+      
+      // Initialize chat state
+      this.initChatState();
       
       // Get the room ID if not already set
       if (!this.currentRoomId) {
@@ -463,6 +543,12 @@ class Conference {
       // Clear the room ID when disconnecting
       console.log('Connection: Clearing currentRoomId (was:', this.currentRoomId, ')');
       this.currentRoomId = null;
+      
+      // Clean up emoji reaction timeouts and elements
+      this.cleanupEmojiReactionTimeouts();
+      
+      // Clean up chat
+      this.cleanupChat();
       
       // Hide conference UI
       if (this.conferenceEl) this.conferenceEl.classList.add("hide");
@@ -523,8 +609,8 @@ class Conference {
       }
       
       // Is the user authorized to promote listeners?
-      if (!hmsService.isRoomCreator()) {
-        showErrorMessage('Only the room creator can promote listeners to speakers.');
+      if (!hmsService.canModerate()) {
+        showErrorMessage('Only the room creator and cohosts can promote listeners to speakers.');
         return;
       }
       
@@ -569,19 +655,30 @@ class Conference {
     
     const localPeer = hmsService.store.getState(selectLocalPeer);
     
-    // Verify user is a streamer
-    if (localPeer?.roleName !== HMS_ROLES.STREAMER) {
-      showErrorMessage('Only streamers can manage participants');
+    // Verify the user can moderate
+    if (!hmsService.canModerate()) {
+      showErrorMessage('Only the room creator and cohosts can move speakers to listeners');
       return;
     }
     
-    // Verify user is the room creator
-    if (!hmsService.isRoomCreator()) {
-      showErrorMessage('Only the room creator can demote speakers to listeners');
+    // Check if the target peer is a cohost
+    const isPeerCohost = hmsService.hasPeerRole(selectedPeerId, USER_ROLES.COHOST);
+    
+    // Check if we are the room creator
+    const isCreator = hmsService.isRoomCreator();
+    
+    // If the target is a cohost and we're not the creator, prevent the action
+    if (isPeerCohost && !isCreator) {
+      showErrorMessage('Only the room creator can move cohosts to listeners');
       return;
     }
     
     try {
+      // If the peer is a cohost, remove cohost status first
+      if (isPeerCohost && isCreator) {
+        await hmsService.removePeerCohost(selectedPeerId);
+      }
+      
       // Change role
       await hmsService.changeRole(selectedPeerId, HMS_ROLES.VIEWER);
       
@@ -613,22 +710,30 @@ class Conference {
     const expectedRole = document.getElementById('expected-role')?.value;
     const isStreamer = expectedRole === HMS_ROLES.STREAMER || localPeer?.roleName === HMS_ROLES.STREAMER;
     
+    // Check if user is the creator - this affects which buttons we show
+    const isCreator = hmsService.isRoomCreator();
+    
     console.log('Controls visibility check:', {
       expectedRole,
       actualRole: localPeer?.roleName,
       isStreamer,
-      controlsHidden: !isStreamer
+      isCreator
     });
 
+    // Always show control bar
     this.controls.classList.remove('hide');
-        
-    // Also make sure host controls are visible if user should be a streamer
-    if (isStreamer) {
-      this.hostControls.classList.remove('hide');
-      this.viewerControls.classList.add('hide');
+    
+    // Handle controls visibility based on role
+    if (isCreator) {
+      // For creators: only show mute, chat, and end room
+      this.viewerControls.classList.add('hide'); // Hide emoji and hand raise buttons
+      this.hostControls.classList.remove('hide'); // Show end room button
+      this.leaveBtn.classList.add('hide'); // Hide leave button
     } else {
+      // For non-creators: show emoji, hand raise, and leave buttons
       this.viewerControls.classList.remove('hide');
       this.hostControls.classList.add('hide');
+      this.leaveBtn.classList.remove('hide');
     }
   }
   
@@ -715,15 +820,48 @@ class Conference {
                    localPeer?.role === HMS_ROLES.STREAMER;
     
     // Check if we're the creator of the room
-    const isCreator = hmsService.isRoomCreator();
+    let isCreator = hmsService.isRoomCreator();
+    
+    // SAFETY CHECK: If the UI state says we were previously the creator but HMS thinks we're not,
+    // this likely means we had a metadata corruption - log it and honor the UI state
+    if (!isCreator && this.wasCreator === true) {
+      console.error('METADATA CORRUPTION DETECTED: Local peer lost creator status, restoring...');
+      isCreator = true;
+      // Try to restore the creator status in the HMS metadata
+      if (localPeer && localPeer.id) {
+        try {
+          // Get current metadata
+          let metadata = {};
+          if (localPeer.metadata) {
+            metadata = typeof localPeer.metadata === 'string' ? 
+              JSON.parse(localPeer.metadata) : localPeer.metadata;
+          }
+          metadata.isCreator = true;
+          
+          // Update our metadata asynchronously
+          hmsService.actions.changeMetadata(JSON.stringify(metadata))
+            .then(() => console.log('Successfully restored creator status'))
+            .catch(err => console.error('Failed to restore creator status:', err));
+        } catch (e) {
+          console.error('Error attempting to restore creator status:', e);
+        }
+      }
+    }
+    
+    // Save creator status for consistency checks
+    this.wasCreator = isCreator;
 
     // Show the correct buttons per role
     if (isCreator) {
-      this.viewerControls.classList.add('hide');
-      this.hostControls.classList.remove('hide');
+      // For creators: only show mute, chat, and end room
+      this.viewerControls.classList.add('hide'); // Hide emoji and hand raise buttons
+      this.hostControls.classList.remove('hide'); // Show end room button
+      this.leaveBtn.classList.add('hide'); // Hide "Leave" button for room creators
     } else {
+      // For non-creators: show emoji, hand raise, and leave buttons
       this.viewerControls.classList.remove('hide');
       this.hostControls.classList.add('hide');
+      this.leaveBtn.classList.remove('hide'); // Show "Leave" button for non-creators
     }
 
     // Render speakers list
@@ -771,10 +909,13 @@ class Conference {
       
       // Check if this speaker is the room creator
       let isCreator = false;
+      let isCohost = false;
+      
       try {
         if (speaker.metadata) {
           const metadata = typeof speaker.metadata === 'string' ? JSON.parse(speaker.metadata) : speaker.metadata;
           isCreator = metadata.isCreator === true;
+          isCohost = metadata.isCohost === true;
         }
       } catch (e) {
         console.warn('Error parsing peer metadata:', e);
@@ -813,9 +954,17 @@ class Conference {
         isSpeaking ? 'speaking' : ''
       ].filter(Boolean).join(' ');
       
-      // Use crown for creator, star for regular speakers
-      const hostBadgeContent = isCreator ? '👑' : '★';
-      const hostBadgeClass = isCreator ? 'host-badge creator-badge' : 'host-badge';
+      // Use crown for creator, star for regular speakers, special badge for cohosts
+      let hostBadgeContent = '★';
+      let hostBadgeClass = 'host-badge';
+      
+      if (isCreator) {
+        hostBadgeContent = '👑';
+        hostBadgeClass = 'host-badge creator-badge';
+      } else if (isCohost) {
+        hostBadgeContent = '👑';
+        hostBadgeClass = 'host-badge cohost-badge';
+      }
       
       return `
         <div class="speaker-item" data-peer-id="${speaker.id}" data-role="${speaker.roleName || speaker.role || HMS_ROLES.STREAMER}" title="${userIsCreator && !isLocal ? 'Click to manage this speaker' : ''}">
@@ -978,8 +1127,8 @@ class Conference {
    * @param {Event} e - Click event
    */
   handlePeerClick(e) {
-    // Only proceed if we are the room creator
-    if (!hmsService.isRoomCreator()) return;
+    // Only proceed if we can moderate
+    if (!hmsService.canModerate()) return;
     
     // Don't process if the click was directly on an avatar
     if (e.target.closest('.avatar')) {
@@ -1006,6 +1155,28 @@ class Conference {
     const profile = userService.getProfileFromPeer(peer);
     const displayName = userService.getDisplayName(peer);
     
+    // Check if the selected peer is a creator (can't moderate creators)
+    const isPeerCreator = hmsService.hasPeerRole(peerId, USER_ROLES.CREATOR);
+    if (isPeerCreator) {
+      showErrorMessage('Room creator cannot be moderated');
+      return;
+    }
+    
+    // Check if this peer is a cohost
+    const isPeerCohost = hmsService.hasPeerRole(peerId, USER_ROLES.COHOST);
+    
+    // Check if we are the room creator
+    const isCreator = hmsService.isRoomCreator();
+    
+    // Check if we are a cohost (but not creator)
+    const isCohost = !isCreator && hmsService.isCohost();
+    
+    // Don't allow cohosts to moderate other cohosts
+    if (isCohost && isPeerCohost) {
+      showErrorMessage('Cohosts cannot modify other cohosts');
+      return;
+    }
+    
     // Show action modal
     this.listenerActionModal.classList.remove('hide');
       
@@ -1025,24 +1196,44 @@ class Conference {
     // Get the description elements
     const promoteDescription = document.getElementById('promote-description');
     const demoteDescription = document.getElementById('demote-description');
+    const cohostDescription = document.getElementById('cohost-description');
+    
+    // Hide all descriptions and buttons by default
+    if (promoteDescription) promoteDescription.classList.add('hide');
+    if (demoteDescription) demoteDescription.classList.add('hide');
+    if (cohostDescription) cohostDescription.classList.add('hide');
+    
+    this.promoteListenerBtn.classList.add('hide');
+    this.demoteSpeakerBtn.classList.add('hide');
+    this.makeCoHostBtn.classList.add('hide');
+    this.removeCoHostBtn.classList.add('hide');
     
     // Show/hide appropriate buttons and descriptions based on role
     if (role === HMS_ROLES.VIEWER) {
       // Viewer can be promoted to speaker
       this.promoteListenerBtn.classList.remove('hide');
-      this.demoteSpeakerBtn.classList.add('hide');
-      
-      // Show/hide appropriate descriptions
-      if (promoteDescription) promoteDescription.classList.remove('hide');
-      if (demoteDescription) demoteDescription.classList.add('hide');
+      promoteDescription.classList.remove('hide');
     } else {
       // Speaker can be demoted to viewer
-      this.promoteListenerBtn.classList.add('hide');
       this.demoteSpeakerBtn.classList.remove('hide');
+      demoteDescription.classList.remove('hide');
       
-      // Show/hide appropriate descriptions
-      if (promoteDescription) promoteDescription.classList.add('hide');
-      if (demoteDescription) demoteDescription.classList.remove('hide');
+      // TEMPORARILY DISABLED: Cohost functionality due to issues with metadata corruption
+      // Only uncomment when the issue is fixed
+      /*
+      // Only creators can manage cohosts
+      if (isCreator) {
+        cohostDescription.classList.remove('hide');
+        
+        if (isPeerCohost) {
+          // Already a cohost, show remove button
+          this.removeCoHostBtn.classList.remove('hide');
+        } else {
+          // Not a cohost, show make cohost button
+          this.makeCoHostBtn.classList.remove('hide');
+        }
+      }
+      */
     }
   }
   
@@ -1331,21 +1522,28 @@ class Conference {
   handleEmojiReaction(event) {
     const { emoji, senderId, senderName } = event.detail;
     
-    // First, remove any existing containers from this sender
-    const existingContainers = document.querySelectorAll(`.reaction-container[data-sender-id="${senderId}"]`);
-    existingContainers.forEach(container => {
-      // Clear any pending timeouts
-      if (container.dataset.removalTimeout) {
-        clearTimeout(parseInt(container.dataset.removalTimeout));
-      }
-      container.remove();
-    });
+    // Initialize tracking if not already done
+    if (!this.emojiReactionTimeouts) {
+      this.emojiReactionTimeouts = new Map();
+    }
+    if (!this.activeSenderContainers) {
+      this.activeSenderContainers = new Map();
+    }
+    
+    // Generate a unique reaction ID for tracking
+    const reactionId = `${senderId}-${Date.now()}`;
+    
+    // IMPORTANT: Force cleanup of ALL existing emoji containers from this sender
+    this.cleanupPreviousEmojis(senderId);
     
     // Create a new container with a random position
     const randomId = Date.now().toString();
+    const containerId = `emoji-container-${randomId}`;
     const senderContainer = document.createElement('div');
     senderContainer.className = `reaction-container`;
     senderContainer.dataset.senderId = senderId || 'unknown';
+    senderContainer.dataset.reactionId = reactionId;
+    senderContainer.id = containerId;
     
     // Position container randomly along the width of the page
     const randomPosition = Math.floor(Math.random() * 85); // 0-85% across the width
@@ -1357,14 +1555,25 @@ class Conference {
     senderContainer.style.height = '500px';
     senderContainer.style.pointerEvents = 'none';
     
+    // Track this container for this sender
+    if (!this.activeSenderContainers.has(senderId)) {
+      this.activeSenderContainers.set(senderId, new Set());
+    }
+    this.activeSenderContainers.get(senderId).add(containerId);
+    
+    // Add to DOM after cleanup is complete
     this.emojiContainer.appendChild(senderContainer);
     
     // Set timeout to remove container after animations complete
     const removalTimeout = setTimeout(() => {
-      if (senderContainer && senderContainer.parentNode) {
-        senderContainer.remove();
-      }
+      this.cleanupEmojiContainer(containerId, senderId);
     }, 6500);
+    
+    // Track this timeout for the sender
+    if (!this.emojiReactionTimeouts.has(senderId)) {
+      this.emojiReactionTimeouts.set(senderId, []);
+    }
+    this.emojiReactionTimeouts.get(senderId).push(removalTimeout);
     
     // Store the timeout ID on the container for future reference
     senderContainer.dataset.removalTimeout = removalTimeout;
@@ -1378,6 +1587,8 @@ class Conference {
       const emojiElement = document.createElement('div');
       emojiElement.className = 'flying-emoji';
       emojiElement.textContent = emoji;
+      emojiElement.dataset.senderId = senderId;
+      emojiElement.dataset.reactionId = reactionId;
       
       // Calculate random position with better distribution
       const xOffset = Math.random() * 160 - 80; // -80px to +80px from center
@@ -1402,11 +1613,70 @@ class Conference {
       senderContainer.appendChild(emojiElement);
       
       // Remove emoji after animation completes
-      setTimeout(() => {
+      const emojiTimeout = setTimeout(() => {
         if (emojiElement && emojiElement.parentNode) {
           emojiElement.remove();
         }
       }, 5000 + (animDelay * 1000) + 100);
+      
+      // Track this timeout for cleanup
+      this.emojiReactionTimeouts.get(senderId).push(emojiTimeout);
+    }
+  }
+  
+  /**
+   * Clean up previous emojis from a sender
+   * @param {string} senderId - ID of the sender
+   */
+  cleanupPreviousEmojis(senderId) {
+    // Step 1: Remove ALL containers for this sender
+    const existingContainers = document.querySelectorAll(`.reaction-container[data-sender-id="${senderId}"]`);
+    console.log(`Removing ${existingContainers.length} existing emoji containers for sender ${senderId}`);
+    
+    existingContainers.forEach(container => {
+      // Clear any pending timeouts stored on the container
+      if (container.dataset.removalTimeout) {
+        clearTimeout(parseInt(container.dataset.removalTimeout));
+      }
+      
+      // Remove the container completely
+      container.remove();
+    });
+    
+    // Step 2: Clear all timeouts for this sender
+    if (this.emojiReactionTimeouts && this.emojiReactionTimeouts.has(senderId)) {
+      const timeoutIds = this.emojiReactionTimeouts.get(senderId);
+      timeoutIds.forEach(timeoutId => clearTimeout(timeoutId));
+      this.emojiReactionTimeouts.set(senderId, []); // Reset the array but keep the entry
+    }
+    
+    // Step 3: Clear tracking for containers
+    if (this.activeSenderContainers && this.activeSenderContainers.has(senderId)) {
+      this.activeSenderContainers.set(senderId, new Set()); // Reset the set but keep the entry
+    }
+    
+    // Step 4: Final check for any orphaned flying emojis from this sender
+    const allFlyingEmojis = document.querySelectorAll(`.flying-emoji[data-sender-id="${senderId}"]`);
+    allFlyingEmojis.forEach(emojiEl => {
+      emojiEl.remove();
+    });
+  }
+  
+  /**
+   * Clean up a specific emoji container
+   * @param {string} containerId - ID of the container to clean up
+   * @param {string} senderId - ID of the sender for tracking
+   */
+  cleanupEmojiContainer(containerId, senderId) {
+    // Remove the container from the DOM
+    const containerToRemove = document.getElementById(containerId);
+    if (containerToRemove) {
+      containerToRemove.remove();
+    }
+    
+    // Remove from tracking
+    if (this.activeSenderContainers && this.activeSenderContainers.has(senderId)) {
+      this.activeSenderContainers.get(senderId).delete(containerId);
     }
   }
   
@@ -1417,6 +1687,359 @@ class Conference {
   handleEmojiCooldownComplete(event) {
     console.log('[DEBUG] Conference received emoji cooldown complete event:', event.detail);
     this.renderPeers();
+  }
+  
+  /**
+   * Handle active speaker change event from HMS
+   * @param {CustomEvent} event - Active speaker change event
+   */
+  handleActiveSpeakerChange(event) {
+    const { activeSpeakerId, speakingPeers } = event.detail;
+    
+    console.log('Active speaker changed:', activeSpeakerId);
+    
+    // Update the UI to reflect the new speaking state
+    // This is more efficient than re-rendering all peers
+    
+    // First, get all speaker avatars
+    const speakerAvatars = document.querySelectorAll('.speaker-item .avatar');
+    
+    // Remove speaking class from all avatars
+    speakerAvatars.forEach(avatar => {
+      avatar.classList.remove('speaking');
+    });
+    
+    // If there's an active speaker, add the speaking class to their avatar
+    if (activeSpeakerId) {
+      const activeSpeakerAvatar = document.querySelector(`.speaker-item[data-peer-id="${activeSpeakerId}"] .avatar`);
+      if (activeSpeakerAvatar) {
+        activeSpeakerAvatar.classList.add('speaking');
+      }
+    }
+  }
+  
+  /**
+   * Initialize chat state
+   */
+  initChatState() {
+    // Initialize chat state
+    this.unreadMessages = 0;
+    this.isChatOpen = false;
+    this.chatUsers = new Map(); // Map to store user info by peer ID
+    this.chatTimestamps = new Set(); // Set to prevent duplicate messages
+    
+    // Update UI
+    this.updateChatBadge();
+  }
+  
+  /**
+   * Handle close button click
+   * @param {Event} event - Click event
+   */
+  handleCloseButtonClick(event) {
+    // Make sure we stop event propagation to prevent other handlers from firing
+    event.stopPropagation();
+    
+    const button = event.currentTarget;
+    const modalId = button.dataset.modal;
+    
+    if (modalId) {
+      const modalElement = document.getElementById(modalId);
+      modalElement.classList.add('hide');
+      
+      // Clear selected peer if this is a peer action modal
+      if (modalId === 'listener-action-modal') {
+        hmsService.clearSelectedPeerId();
+      }
+      
+      // Special handling for chat container
+      if (modalId === 'chat-container') {
+        this.isChatOpen = false;
+        console.log('Chat closed by X button, isChatOpen set to:', this.isChatOpen);
+        
+        // Handle both class and inline style display
+        modalElement.style.display = 'none';
+        
+        // Remove any existing outside click handler
+        document.removeEventListener('click', this.closeOnOutsideClick);
+      }
+    }
+  }
+
+  /**
+   * Handle chat button click
+   * @param {Event} event - Click event
+   */
+  handleChatBtnClick(event) {
+    event.preventDefault();
+    
+    console.log('Chat button clicked, current isChatOpen state:', this.isChatOpen);
+    
+    // Toggle chat container visibility
+    this.isChatOpen = !this.isChatOpen;
+    
+    console.log('Chat button clicked, new isChatOpen state:', this.isChatOpen);
+    
+    if (this.isChatOpen) {
+      // Handle both class and inline style display
+      this.chatContainer.classList.remove('hide');
+      this.chatContainer.style.display = '';
+      
+      // Reset unread count and update UI
+      this.unreadMessages = 0;
+      this.updateChatBadge();
+      
+      // Focus input field
+      setTimeout(() => {
+        if (this.chatInput) {
+          this.chatInput.focus();
+        }
+      }, 300);
+      
+      // Scroll to bottom of messages
+      this.scrollChatToBottom();
+      
+      // Remove any existing outside click handler first
+      document.removeEventListener('click', this.closeOnOutsideClick);
+      
+      // Create the click-outside listener to close the chat
+      this.closeOnOutsideClick = (event) => {
+        // If the click was outside chat and not on the chat button
+        if (!event.target.closest('#chat-container') && 
+            !event.target.closest('#chat-btn') &&
+            this.chatContainer && 
+            !this.chatContainer.classList.contains('hide')) {
+          this.chatContainer.classList.add('hide');
+          this.chatContainer.style.display = 'none';
+          this.isChatOpen = false;
+          console.log('Chat closed by outside click, isChatOpen set to:', this.isChatOpen);
+          document.removeEventListener('click', this.closeOnOutsideClick);
+        }
+      };
+      
+      // Add the listener after a small delay to avoid triggering immediately
+      setTimeout(() => {
+        document.addEventListener('click', this.closeOnOutsideClick);
+      }, 100);
+    } else {
+      this.chatContainer.classList.add('hide');
+      this.chatContainer.style.display = 'none';
+    }
+  }
+  
+  /**
+   * Handle sending a chat message
+   */
+  async handleChatSend() {
+    if (!this.chatInput || !this.chatInput.value.trim()) return;
+    
+    const messageText = this.chatInput.value.trim();
+    
+    try {
+      // Try to send the message
+      const result = await hmsService.sendChatMessage(messageText);
+      
+      if (result.success) {
+        // Clear input field
+        this.chatInput.value = '';
+        this.chatInput.focus();
+      } else if (result.error === 'rate_limited') {
+        showErrorMessage(result.message);
+      } else {
+        showErrorMessage('Failed to send message. Please try again.');
+      }
+    } catch (error) {
+      console.error('Error sending chat message:', error);
+      showErrorMessage('Failed to send message. Please try again.');
+    }
+  }
+  
+  /**
+   * Handle received chat message
+   * @param {CustomEvent} event - Chat message event
+   */
+  handleChatMessage(event) {
+    const { messageData, senderId, senderName, timestamp } = event.detail;
+    
+    // Check if this is a local message
+    const localPeer = hmsService.getLocalPeer();
+    const isLocalMessage = localPeer && localPeer.id === senderId;
+    
+    // Generate a unique message ID based on content and timestamp to avoid duplicates
+    const messageId = `${senderId}-${timestamp}-${messageData.text.substring(0, 20)}`;
+    
+    // Check if we've already rendered this message
+    if (this.chatTimestamps.has(messageId)) {
+      return;
+    }
+    
+    // Mark message as processed
+    this.chatTimestamps.add(messageId);
+    
+    // Format the timestamp
+    const messageTime = new Date(timestamp || messageData.timestamp || Date.now());
+    const formattedTime = messageTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    
+    // Create message element
+    const messageElement = document.createElement('div');
+    messageElement.className = `chat-message ${isLocalMessage ? 'outgoing' : 'incoming'}`;
+    
+    // Store user info for this peer if not already stored
+    if (senderId && !this.chatUsers.has(senderId)) {
+      this.chatUsers.set(senderId, { 
+        name: senderName || 'Unknown User',
+        isLocalUser: isLocalMessage
+      });
+    }
+    
+    // Show sender name for incoming messages only
+    if (!isLocalMessage) {
+      const senderElement = document.createElement('div');
+      senderElement.className = 'message-sender';
+      senderElement.textContent = this.chatUsers.get(senderId)?.name || senderName || 'Unknown User';
+      messageElement.appendChild(senderElement);
+    }
+    
+    // Message content
+    const contentElement = document.createElement('div');
+    contentElement.className = 'message-content';
+    contentElement.textContent = messageData.text;
+    messageElement.appendChild(contentElement);
+    
+    // Message timestamp
+    const timeElement = document.createElement('div');
+    timeElement.className = 'message-time';
+    timeElement.textContent = formattedTime;
+    messageElement.appendChild(timeElement);
+    
+    // Add to chat container
+    this.chatMessages.appendChild(messageElement);
+    
+    // Increment unread count if chat is not open
+    if (!this.isChatOpen) {
+      this.unreadMessages++;
+      this.updateChatBadge();
+    }
+    
+    // Scroll to bottom
+    this.scrollChatToBottom();
+  }
+  
+  /**
+   * Handle chat cooldown complete event
+   * @param {CustomEvent} event - Chat cooldown complete event
+   */
+  handleChatCooldownComplete(event) {
+    // No need to do anything here, the button is never disabled
+  }
+  
+  /**
+   * Scroll chat to bottom
+   */
+  scrollChatToBottom() {
+    if (this.chatMessages) {
+      this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
+    }
+  }
+  
+  /**
+   * Update the chat badge with unread count
+   */
+  updateChatBadge() {
+    if (!this.chatBadge) return;
+    
+    if (this.unreadMessages > 0) {
+      this.chatBadge.textContent = this.unreadMessages > 99 ? '99+' : this.unreadMessages;
+      this.chatBadge.classList.remove('hide');
+      this.chatBtn.classList.add('chat-btn-active');
+    } else {
+      this.chatBadge.classList.add('hide');
+      this.chatBtn.classList.remove('chat-btn-active');
+    }
+  }
+  
+  /**
+   * Clean up chat state and DOM elements
+   */
+  cleanupChat() {
+    // Clear message container
+    if (this.chatMessages) {
+      this.chatMessages.innerHTML = '';
+    }
+    
+    // Reset state
+    this.unreadMessages = 0;
+    this.isChatOpen = false;
+    this.chatUsers = new Map();
+    this.chatTimestamps = new Set();
+    
+    // Update UI
+    this.updateChatBadge();
+    
+    // Hide chat container using both class and inline style
+    if (this.chatContainer) {
+      this.chatContainer.classList.add('hide');
+      this.chatContainer.style.display = 'none';
+    }
+    
+    // Remove any click-outside listeners
+    if (this.closeOnOutsideClick) {
+      document.removeEventListener('click', this.closeOnOutsideClick);
+    }
+  }
+  
+  /**
+   * Handle making a peer a cohost
+   */
+  async handleMakeCohost() {
+    const selectedPeerId = hmsService.getSelectedPeerId();
+    if (!selectedPeerId) return;
+    
+    try {
+      // Close the modal first
+      this.listenerActionModal.classList.add('hide');
+      
+      // Make the peer a cohost
+      const success = await hmsService.makePeerCohost(selectedPeerId);
+      
+      if (success) {
+        // Update the UI
+        this.renderPeers();
+      }
+      
+      // Clear the selected peer
+      hmsService.clearSelectedPeerId();
+    } catch (error) {
+      console.error('Error making peer cohost:', error);
+      showErrorMessage('Failed to make peer a cohost');
+    }
+  }
+  
+  /**
+   * Handle removing cohost status from a peer
+   */
+  async handleRemoveCohost() {
+    const selectedPeerId = hmsService.getSelectedPeerId();
+    if (!selectedPeerId) return;
+    
+    try {
+      // Close the modal first
+      this.listenerActionModal.classList.add('hide');
+      
+      // Remove cohost status
+      const success = await hmsService.removePeerCohost(selectedPeerId);
+      
+      if (success) {
+        // Update the UI
+        this.renderPeers();
+      }
+      
+      // Clear the selected peer
+      hmsService.clearSelectedPeerId();
+    } catch (error) {
+      console.error('Error removing peer cohost status:', error);
+      showErrorMessage('Failed to update cohost status');
+    }
   }
 }
 

@@ -115,18 +115,28 @@
     </div>
 
     <div id="controls" class="control-bar hide">
-      <button id="mute-audio" class="btn-control">
-        <svg class="mic-icon" width="24" height="24" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-          <!-- Microphone body -->
-          <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" 
-                fill="currentColor" />
-          <!-- Stand/base of microphone -->
-          <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-0.49 6-3.39 6-6.92h-2z" 
-                fill="currentColor" />
-        </svg>
-        <span>Mute</span>
-      </button>
+      <!-- Left side controls -->
+      <div class="left-controls">
+        <button id="mute-audio" class="btn-control">
+          <svg class="mic-icon" width="24" height="24" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+            <!-- Microphone body -->
+            <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" 
+                  fill="currentColor" />
+            <!-- Stand/base of microphone -->
+            <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-0.49 6-3.39 6-6.92h-2z" 
+                  fill="currentColor" />
+          </svg>
+          <span>Mute</span>
+        </button>
+        
+        <!-- Chat button - available for all users regardless of role -->
+        <button id="chat-btn" class="btn-secondary-small" style="position: relative;">
+          <span>💬</span>
+          <span id="chat-badge" class="notification-badge hide">0</span>
+        </button>
+      </div>
 
+      <!-- Center controls -->
       <div id="viewer-controls" class="viewer-controls">
         <button id="emoji-reaction-btn" class="btn-secondary-small">
           <span>😀</span>
@@ -134,11 +144,16 @@
         <button id="raise-hand-btn" class="btn-secondary-small">
           <span>✋</span>
         </button>
-        <button id="leave-room-btn" class="btn-danger-small">Leave</button>
       </div>
       
-      <div id="host-controls" class="host-controls hide">
-        <button id="end-room" class="btn-danger-small">End Room</button>
+      <!-- Right side controls -->
+      <div class="right-controls">
+        <!-- For room creators: show End Room button -->
+        <div id="host-controls" class="host-controls hide">
+          <button id="end-room" class="btn-danger-small">End Room</button>
+        </div>
+        <!-- For non-creators: show Leave button -->
+        <button id="leave-room-btn" class="btn-danger-small">Leave</button>
       </div>
     </div>
     
@@ -170,12 +185,23 @@
             <p>Moving a speaker back to listener will prevent them from speaking in the room.</p>
           </div>
           
+          <div class="action-description hide" id="cohost-description">
+            <h4>Cohost Privileges</h4>
+            <p>Cohosts can manage speakers and listeners, helping you moderate the room.</p>
+          </div>
+          
           <div class="action-buttons">
             <button id="promote-listener" class="btn-primary">
               <span class="btn-icon">🎤</span> Invite to Speak
             </button>
             <button id="demote-speaker" class="btn-danger hide">
               <span class="btn-icon">🔇</span> Move to Listeners
+            </button>
+            <button id="make-cohost-btn" class="btn-secondary hide">
+              <span class="btn-icon">👑</span> Make Co-host
+            </button>
+            <button id="remove-cohost-btn" class="btn-secondary hide">
+              <span class="btn-icon">👤</span> Remove Co-host Status
             </button>
           </div>
         </div>
@@ -205,6 +231,18 @@
     </div>
     
     <div id="emoji-container" class="emoji-container"></div>
+    
+    <div id="chat-container" class="chat-container hide">
+      <div class="chat-header">
+        <h3>Chat</h3>
+        <button class="close-button" data-modal="chat-container">&times;</button>
+      </div>
+      <div id="chat-messages" class="chat-messages"></div>
+      <div class="chat-input-container">
+        <input type="text" id="chat-input" placeholder="Type a message..." />
+        <button id="chat-send-btn">Send</button>
+      </div>
+    </div>
 
     <script type="module" src="src/main.js"></script>
   </body>

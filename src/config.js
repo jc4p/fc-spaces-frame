@@ -10,6 +10,14 @@ export const HMS_ROLES = {
   VIEWER: 'fariscope-viewer',
 };
 
+// User role types
+export const USER_ROLES = {
+  CREATOR: 'creator',
+  COHOST: 'cohost',
+  SPEAKER: 'speaker',
+  LISTENER: 'listener',
+};
+
 // User profile cache timeout (in milliseconds)
 export const PROFILE_CACHE_TIMEOUT = 1000 * 60 * 15; // 15 minutes
 
@@ -20,7 +28,7 @@ export const ROOM_REFRESH_INTERVAL = 30000; // 30 seconds
 export const DEBUG_MODE = false;
 
 // Maintenance mode
-export const MID_CONSTRUCTION = true;
+export const MID_CONSTRUCTION = false;
 
 // Debug room settings
 export const DEBUG_ROOM = {
@@ -91,5 +99,13 @@ export const DOM_IDS = {
   EMOJI_REACTION_BTN: "emoji-reaction-btn",
   EMOJI_REACTION_MODAL: "emoji-reaction-modal",
   EMOJI_CONTAINER: "emoji-container",
-  MAINTENANCE_SCREEN: "maintenance-screen"
+  MAINTENANCE_SCREEN: "maintenance-screen",
+  CHAT_BTN: "chat-btn",
+  CHAT_CONTAINER: "chat-container",
+  CHAT_MESSAGES: "chat-messages",
+  CHAT_INPUT: "chat-input",
+  CHAT_SEND_BTN: "chat-send-btn",
+  CHAT_BADGE: "chat-badge",
+  MAKE_COHOST_BTN: "make-cohost-btn",
+  REMOVE_COHOST_BTN: "remove-cohost-btn"
 }; 

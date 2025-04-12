@@ -12,10 +12,12 @@ import {
   selectLocalPeerID,
   selectHasPeerHandRaised,
   HMSNotificationTypes,
-  selectBroadcastMessages
+  selectBroadcastMessages,
+  selectDominantSpeaker,
+  selectPeerMetadata,
 } from "@100mslive/hms-video-store";
 
-import { HMS_ROLES, SPEAKING_THRESHOLD, DELAYS, DEBUG_MODE, DEBUG_ROOM } from '../config.js';
+import { HMS_ROLES, USER_ROLES, SPEAKING_THRESHOLD, DELAYS, DEBUG_MODE, DEBUG_ROOM } from '../config.js';
 import { showErrorMessage, showSuccessMessage } from '../utils/uiUtils.js';
 import { getMicrophonePermission, unlockIOSAudio, isIOSBrowser } from '../utils/audioUtils.js';
 import { generateMockUsers } from '../utils/mockData.js';
@@ -41,6 +43,10 @@ const HAND_RAISE_DURATION = 15000; // 15 seconds
 const emojiReactionTimers = new Map();
 const EMOJI_REACTION_TIMEOUT = 2000; // 2 seconds
 
+// Chat message rate limiting
+const chatMessageTimers = new Map();
+const CHAT_MESSAGE_TIMEOUT = 1000; // 1 second
+
 /**
  * Service for 100ms integration
  */
@@ -58,6 +64,33 @@ class HMSService {
     // Setup internal state
     this.selectedPeerId = null;
     this.renderedPeerIDs = new Set();
+    this.originalIdentity = null; // To track original user identity
+    
+    // Important subscription to track local peer data for safety
+    this.store.subscribe(localPeer => {
+      if (localPeer && localPeer.id) {
+        // If we don't have the original identity yet, save it
+        if (!this.originalIdentity && localPeer.metadata) {
+          try {
+            const metadata = typeof localPeer.metadata === 'string' ? 
+              JSON.parse(localPeer.metadata) : localPeer.metadata;
+            
+            if (metadata.isCreator === true) {
+              // Save the creator identity for protection
+              this.originalIdentity = {
+                id: localPeer.id,
+                name: localPeer.name,
+                isCreator: true,
+                metadata: JSON.stringify(metadata)
+              };
+              console.log('Saved original creator identity:', this.originalIdentity);
+            }
+          } catch (e) {
+            console.warn('Error parsing local peer metadata in constructor:', e);
+          }
+        }
+      }
+    }, selectLocalPeer);
     
     // Initialize debug mode
     if (DEBUG_MODE && DEBUG_ROOM.enabled) {
@@ -72,6 +105,45 @@ class HMSService {
     
     // Setup message listeners
     this.setupMessageListeners();
+    
+    // Setup active speaker detection
+    this.setupActiveSpeakerDetection();
+  }
+  
+  /**
+   * Setup active speaker detection using ON_SPEAKER notifications
+   */
+  setupActiveSpeakerDetection() {
+    if (DEBUG_MODE && DEBUG_ROOM.enabled) {
+      // Debug mode doesn't need real HMS notifications
+      return;
+    }
+    
+    // Subscribe to ON_SPEAKER notifications via the dominant speaker selector
+    this.store.subscribe(dominantSpeaker => {
+      if (dominantSpeaker) {
+        console.log('Dominant speaker changed:', dominantSpeaker);
+        
+        // Update the speakingPeers map based on dominant speaker
+        const peers = this.getPeers();
+        
+        // Set all peers as not speaking
+        peers.forEach(peer => {
+          speakingPeers.set(peer.id, false);
+        });
+        
+        // Set the dominant speaker as speaking
+        speakingPeers.set(dominantSpeaker.peerId, true);
+        
+        // Dispatch an event to notify the conference component
+        document.dispatchEvent(new CustomEvent('active-speaker-changed', {
+          detail: { 
+            activeSpeakerId: dominantSpeaker.peerId,
+            speakingPeers: Array.from(speakingPeers.entries())
+          }
+        }));
+      }
+    }, selectDominantSpeaker);
   }
   
   /**
@@ -111,6 +183,25 @@ class HMSService {
         speakingPeers.set(peer.id, peer.isSpeaking);
       }
     });
+    
+    // Find any speaking peer
+    const speakingSpeakers = debugMockPeers.filter(
+      peer => peer.role === HMS_ROLES.STREAMER && peer.isSpeaking
+    );
+    
+    // If we have speaking peers, dispatch an active-speaker-changed event
+    if (speakingSpeakers.length > 0) {
+      // Randomly select one of the speaking peers as the "dominant" speaker
+      const randomIndex = Math.floor(Math.random() * speakingSpeakers.length);
+      const dominantSpeaker = speakingSpeakers[randomIndex];
+      
+      document.dispatchEvent(new CustomEvent('active-speaker-changed', {
+        detail: { 
+          activeSpeakerId: dominantSpeaker.id,
+          speakingPeers: Array.from(speakingPeers.entries())
+        }
+      }));
+    }
   }
   
   /**
@@ -536,16 +627,98 @@ class HMSService {
    * @returns {boolean} Whether local user is room creator
    */
   isRoomCreator() {
+    // FIRST: Check if we have a saved identity record that shows we're the creator
+    if (this.originalIdentity && this.originalIdentity.isCreator === true) {
+      // Cross-check that this is still our peer ID
+      const localPeerId = this.store.getState(selectLocalPeerID);
+      if (localPeerId === this.originalIdentity.id) {
+        // We have confirmed creator status from our stored identity
+        return true;
+      }
+    }
+    
+    // SECOND: Standard check through metadata
     const localPeer = this.store.getState(selectLocalPeer);
     if (!localPeer || !localPeer.metadata) return false;
     
     try {
-      const metadata = JSON.parse(localPeer.metadata);
-      return metadata.isCreator === true;
+      const metadata = typeof localPeer.metadata === 'string' ? 
+        JSON.parse(localPeer.metadata) : localPeer.metadata;
+      
+      const isCreator = metadata.isCreator === true;
+      
+      // If we're detecting creator status but don't have it saved, save it
+      if (isCreator && !this.originalIdentity) {
+        this.originalIdentity = {
+          id: localPeer.id,
+          name: localPeer.name,
+          isCreator: true,
+          metadata: typeof localPeer.metadata === 'string' ? 
+            localPeer.metadata : JSON.stringify(metadata)
+        };
+        console.log('Saved creator identity in isRoomCreator check:', this.originalIdentity);
+      }
+      
+      return isCreator;
     } catch (e) {
       console.warn('Error checking if user is room creator:', e);
+      
+      // THIRD: Emergency fallback - if we've been the creator before, assume we still are
+      if (this.originalIdentity && this.originalIdentity.isCreator === true) {
+        console.warn('Using emergency fallback for creator status after metadata parse error');
+        return true;
+      }
+      
       return false;
     }
+  }
+  
+  /**
+   * Check if a peer has a specific role in the room
+   * @param {string} peerId - ID of peer to check
+   * @param {string} role - Role to check for (creator, cohost, etc)
+   * @returns {boolean} Whether peer has the role
+   */
+  hasPeerRole(peerId, role) {
+    const peers = this.getPeers();
+    const peer = peers.find(p => p.id === peerId);
+    if (!peer || !peer.metadata) return false;
+    
+    try {
+      // Handle both string and object metadata
+      const metadata = typeof peer.metadata === 'string' ? JSON.parse(peer.metadata) : peer.metadata;
+      
+      // Check specific roles
+      if (role === USER_ROLES.CREATOR) {
+        return metadata.isCreator === true;
+      } else if (role === USER_ROLES.COHOST) {
+        return metadata.isCohost === true;
+      }
+      
+      return false;
+    } catch (e) {
+      console.warn(`Error checking if peer has role ${role}:`, e);
+      return false;
+    }
+  }
+  
+  /**
+   * Check if the local user is a cohost
+   * @returns {boolean} Whether local user is a cohost
+   */
+  isCohost() {
+    const localPeer = this.store.getState(selectLocalPeer);
+    if (!localPeer) return false;
+    
+    return this.hasPeerRole(localPeer.id, USER_ROLES.COHOST);
+  }
+  
+  /**
+   * Check if the local user can moderate (creator or cohost)
+   * @returns {boolean} Whether local user can moderate
+   */
+  canModerate() {
+    return this.isRoomCreator() || this.isCohost();
   }
 
   /**
@@ -561,6 +734,370 @@ class HMSService {
       await this.actions.setRemoteTrackEnabled(trackId, enabled);
     } catch (error) {
       console.error('Failed to set remote track enabled:', error);
+    }
+  }
+  
+  /**
+   * Make a peer a cohost
+   * @param {string} peerId - ID of peer to make cohost
+   * @returns {Promise<boolean>} Whether operation was successful
+   */
+  async makePeerCohost(peerId) {
+    try {
+      // Save the local peer identity for protection
+      const localPeer = this.store.getState(selectLocalPeer);
+      const localPeerId = localPeer?.id;
+      
+      // Save our original metadata to restore if needed
+      let originalLocalMetadata = null;
+      try {
+        if (localPeer && localPeer.metadata) {
+          originalLocalMetadata = typeof localPeer.metadata === 'string' ? 
+            localPeer.metadata : JSON.stringify(localPeer.metadata);
+          console.log('Saved original local metadata before cohost operation:', originalLocalMetadata);
+        }
+      } catch (e) {
+        console.warn('Error saving original metadata:', e);
+      }
+      
+      // IMPORTANT VALIDATION CHECKS
+      // 1. Check if the local user is authorized to make cohosts
+      if (!this.isRoomCreator()) {
+        showErrorMessage('Only the room creator can assign cohosts');
+        return false;
+      }
+      
+      // 2. Make sure we have a valid peer ID
+      if (!peerId) {
+        console.error('No peer ID provided for making cohost');
+        return false;
+      }
+      
+      // 3. Make sure we're not trying to modify ourselves
+      if (peerId === localPeerId) {
+        console.error('Attempted to make local peer a cohost, but local peer is already the creator');
+        return false;
+      }
+      
+      // 4. Get the peer to update and validate they exist
+      const peers = this.getPeers();
+      const peer = peers.find(p => p.id === peerId);
+      
+      if (!peer) {
+        console.error('Peer not found:', peerId);
+        return false;
+      }
+      
+      // 5. Check if peer is already a cohost
+      if (this.hasPeerRole(peerId, USER_ROLES.COHOST)) {
+        console.log('Peer is already a cohost:', peerId);
+        return true;
+      }
+      
+      // 6. Check if the peer is already a streamer role
+      const isPeerSpeaker = peer.roleName === HMS_ROLES.STREAMER || peer.role === HMS_ROLES.STREAMER;
+      if (!isPeerSpeaker) {
+        showErrorMessage('Only speakers can be made cohosts. Promote to speaker first.');
+        return false;
+      }
+      
+      // PREPARATION - safely extract current peer metadata
+      let metadata = {};
+      try {
+        if (peer.metadata) {
+          metadata = typeof peer.metadata === 'string' ? JSON.parse(peer.metadata) : peer.metadata;
+        }
+      } catch (e) {
+        console.warn('Error parsing metadata:', e);
+        metadata = {}; // Reset to empty object on parse error
+      }
+      
+      // 7. Don't overwrite creator status
+      if (metadata.isCreator === true) {
+        console.warn('Attempting to make a room creator a cohost, which is unnecessary');
+        return true; // Creator already has all permissions
+      }
+      
+      // IMPLEMENTATION - Create a new metadata object with cohost flag
+      const newMetadata = {
+        ...metadata,   // Preserve existing metadata
+        isCohost: true // Add cohost flag
+      };
+      
+      // CRITICAL: Use direct HMS SDK method with explicit target peer
+      console.log(`Updating metadata for peer ${peerId} (${peer.name}) to make them a cohost`);
+      
+      // Log the metadata before and after for debugging
+      console.log('Old metadata:', metadata);
+      console.log('New metadata:', newMetadata);
+      
+      try {
+        // CRITICAL FIX: Use the Raw HMS SDK APIs via directly accessing the internals
+        // This bypasses the normal changeMetadata method which has issues in this SDK version
+        if (this.actions._hmsActions && this.actions._hmsActions.changeRoleOfPeer) {
+          // Method 1: Use a different, more reliable API that takes explicit peerId
+          await this.actions._hmsActions.changeRemotePeerMetadata(peerId, JSON.stringify(newMetadata));
+          console.log('Successfully updated metadata using changeRemotePeerMetadata');
+        } else {
+          // Method 2: Original method with explicit peer ID
+          await this.actions.changeMetadata(JSON.stringify(newMetadata), peerId);
+          console.log('Successfully updated metadata using standard changeMetadata');
+        }
+      } catch (error) {
+        console.error('Error updating peer metadata:', error);
+        
+        // SAFETY CHECK: Verify if our own metadata was affected accidentally
+        const afterLocalPeer = this.store.getState(selectLocalPeer);
+        let localMetadataChanged = false;
+        
+        try {
+          if (afterLocalPeer && afterLocalPeer.metadata) {
+            const afterMetadata = typeof afterLocalPeer.metadata === 'string' ? 
+              JSON.parse(afterLocalPeer.metadata) : afterLocalPeer.metadata;
+            
+            // Check if our metadata now reflects the other peer's info
+            if (afterMetadata.fid === metadata.fid) {
+              console.error('CRITICAL ERROR: Local metadata was changed to match target peer!');
+              localMetadataChanged = true;
+            }
+          }
+        } catch (e) {
+          console.warn('Error checking if local metadata was affected:', e);
+        }
+        
+        // If our metadata was changed, try to restore it
+        if (localMetadataChanged && originalLocalMetadata) {
+          console.log('Attempting to restore original local metadata:', originalLocalMetadata);
+          try {
+            await this.actions.changeMetadata(originalLocalMetadata);
+            console.log('Successfully restored local metadata');
+          } catch (restoreError) {
+            console.error('Failed to restore local metadata:', restoreError);
+          }
+        }
+        
+        throw error; // Re-throw the original error
+      }
+      
+      // Force a delay before notification to allow HMS to update
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // SAFETY CHECK: Verify if our own metadata was affected accidentally
+      const afterLocalPeer = this.store.getState(selectLocalPeer);
+      let localMetadataChanged = false;
+      
+      try {
+        if (afterLocalPeer && afterLocalPeer.metadata) {
+          const afterMetadata = typeof afterLocalPeer.metadata === 'string' ? 
+            JSON.parse(afterLocalPeer.metadata) : afterLocalPeer.metadata;
+          
+          // Check if our metadata now reflects the other peer's info
+          if (afterMetadata.fid === metadata.fid) {
+            console.error('CRITICAL ERROR: Local metadata was changed to match target peer!');
+            localMetadataChanged = true;
+          }
+        }
+      } catch (e) {
+        console.warn('Error checking if local metadata was affected:', e);
+      }
+      
+      // If our metadata was changed, try to restore it
+      if (localMetadataChanged && originalLocalMetadata) {
+        console.log('Attempting to restore original local metadata:', originalLocalMetadata);
+        try {
+          await this.actions.changeMetadata(originalLocalMetadata);
+          console.log('Successfully restored local metadata');
+        } catch (restoreError) {
+          console.error('Failed to restore local metadata:', restoreError);
+        }
+      }
+      
+      // Show success message
+      showSuccessMessage(`${peer.name} is now a cohost`);
+      
+      return true;
+    } catch (error) {
+      console.error('Error making peer cohost:', error);
+      showErrorMessage('Failed to update cohost status');
+      return false;
+    }
+  }
+  
+  /**
+   * Remove cohost status from a peer
+   * @param {string} peerId - ID of peer to remove cohost status from
+   * @returns {Promise<boolean>} Whether operation was successful
+   */
+  async removePeerCohost(peerId) {
+    try {
+      // Save the local peer identity for protection
+      const localPeer = this.store.getState(selectLocalPeer);
+      const localPeerId = localPeer?.id;
+      
+      // Save our original metadata to restore if needed
+      let originalLocalMetadata = null;
+      try {
+        if (localPeer && localPeer.metadata) {
+          originalLocalMetadata = typeof localPeer.metadata === 'string' ? 
+            localPeer.metadata : JSON.stringify(localPeer.metadata);
+          console.log('Saved original local metadata before removing cohost status:', originalLocalMetadata);
+        }
+      } catch (e) {
+        console.warn('Error saving original metadata:', e);
+      }
+      
+      // IMPORTANT VALIDATION CHECKS
+      // 1. Check if the local user is authorized to manage cohosts
+      if (!this.isRoomCreator()) {
+        showErrorMessage('Only the room creator can manage cohosts');
+        return false;
+      }
+      
+      // 2. Make sure we have a valid peer ID
+      if (!peerId) {
+        console.error('No peer ID provided for removing cohost status');
+        return false;
+      }
+      
+      // 3. Make sure we're not trying to modify ourselves
+      if (peerId === localPeerId) {
+        console.error('Attempted to remove cohost status from local peer, which is the creator');
+        return false;
+      }
+      
+      // 4. Get the peer to update and validate they exist
+      const peers = this.getPeers();
+      const peer = peers.find(p => p.id === peerId);
+      
+      if (!peer) {
+        console.error('Peer not found:', peerId);
+        return false;
+      }
+      
+      // 5. Check if peer is a cohost
+      if (!this.hasPeerRole(peerId, USER_ROLES.COHOST)) {
+        console.log('Peer is not a cohost:', peerId);
+        return true; // Already not a cohost, so technically success
+      }
+      
+      // PREPARATION - safely extract current peer metadata
+      let metadata = {};
+      try {
+        if (peer.metadata) {
+          metadata = typeof peer.metadata === 'string' ? JSON.parse(peer.metadata) : peer.metadata;
+        }
+      } catch (e) {
+        console.warn('Error parsing metadata:', e);
+        metadata = {}; // Reset to empty object on parse error
+      }
+      
+      // 6. Don't modify a room creator's status accidentally
+      if (metadata.isCreator === true) {
+        console.warn('Attempting to modify a room creator\'s cohost status, skipping');
+        return true; // Creator already has inherent permissions
+      }
+      
+      // IMPLEMENTATION - Create a new metadata object without cohost flag
+      const newMetadata = {
+        ...metadata,     // Preserve existing metadata
+        isCohost: false  // Remove cohost flag
+      };
+      
+      // CRITICAL: Use direct HMS SDK method with explicit target peer
+      console.log(`Updating metadata for peer ${peerId} (${peer.name}) to remove cohost status`);
+      
+      // Log the metadata before and after for debugging
+      console.log('Old metadata:', metadata);
+      console.log('New metadata:', newMetadata);
+      
+      try {
+        // CRITICAL FIX: Try to use the HMS SDK's internal methods first for more reliability
+        if (this.actions._hmsActions && this.actions._hmsActions.changeRemotePeerMetadata) {
+          // Method 1: Use a different, more reliable API that takes explicit peerId
+          await this.actions._hmsActions.changeRemotePeerMetadata(peerId, JSON.stringify(newMetadata));
+          console.log('Successfully removed cohost status using changeRemotePeerMetadata');
+        } else {
+          // Method 2: Original method with explicit peer ID
+          await this.actions.changeMetadata(JSON.stringify(newMetadata), peerId);
+          console.log('Successfully removed cohost status using standard changeMetadata');
+        }
+      } catch (error) {
+        console.error('Error updating peer metadata:', error);
+        
+        // SAFETY CHECK: Verify if our own metadata was affected accidentally
+        const afterLocalPeer = this.store.getState(selectLocalPeer);
+        let localMetadataChanged = false;
+        
+        try {
+          if (afterLocalPeer && afterLocalPeer.metadata) {
+            const afterMetadata = typeof afterLocalPeer.metadata === 'string' ? 
+              JSON.parse(afterLocalPeer.metadata) : afterLocalPeer.metadata;
+            
+            // Check if our metadata now reflects the other peer's info
+            if (afterMetadata.fid === metadata.fid) {
+              console.error('CRITICAL ERROR: Local metadata was changed to match target peer!');
+              localMetadataChanged = true;
+            }
+          }
+        } catch (e) {
+          console.warn('Error checking if local metadata was affected:', e);
+        }
+        
+        // If our metadata was changed, try to restore it
+        if (localMetadataChanged && originalLocalMetadata) {
+          console.log('Attempting to restore original local metadata:', originalLocalMetadata);
+          try {
+            await this.actions.changeMetadata(originalLocalMetadata);
+            console.log('Successfully restored local metadata');
+          } catch (restoreError) {
+            console.error('Failed to restore local metadata:', restoreError);
+          }
+        }
+        
+        throw error; // Re-throw the original error
+      }
+      
+      // Force a delay before notification to allow HMS to update
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // SAFETY CHECK: Verify if our own metadata was affected accidentally
+      const afterLocalPeer = this.store.getState(selectLocalPeer);
+      let localMetadataChanged = false;
+      
+      try {
+        if (afterLocalPeer && afterLocalPeer.metadata) {
+          const afterMetadata = typeof afterLocalPeer.metadata === 'string' ? 
+            JSON.parse(afterLocalPeer.metadata) : afterLocalPeer.metadata;
+          
+          // Check if our metadata now reflects the other peer's info
+          if (afterMetadata.fid === metadata.fid) {
+            console.error('CRITICAL ERROR: Local metadata was changed to match target peer!');
+            localMetadataChanged = true;
+          }
+        }
+      } catch (e) {
+        console.warn('Error checking if local metadata was affected:', e);
+      }
+      
+      // If our metadata was changed, try to restore it
+      if (localMetadataChanged && originalLocalMetadata) {
+        console.log('Attempting to restore original local metadata:', originalLocalMetadata);
+        try {
+          await this.actions.changeMetadata(originalLocalMetadata);
+          console.log('Successfully restored local metadata');
+        } catch (restoreError) {
+          console.error('Failed to restore local metadata:', restoreError);
+        }
+      }
+      
+      // Show success message
+      showSuccessMessage(`${peer.name} is no longer a cohost`);
+      
+      return true;
+    } catch (error) {
+      console.error('Error removing peer cohost status:', error);
+      showErrorMessage('Failed to update cohost status');
+      return false;
     }
   }
 
@@ -592,8 +1129,24 @@ class HMSService {
 
   /**
    * Update speaking status for all peers
+   * Note: This uses audio level detection as a fallback method.
+   * For production environments, the ON_SPEAKER notification is preferred through
+   * the setupActiveSpeakerDetection method.
    */
   updateSpeakingStatus() {
+    // This method will be used mainly in DEBUG_MODE or as a fallback
+    // when the ON_SPEAKER notification is not available
+    
+    // In non-debug mode, don't use this method when selectDominantSpeaker is available
+    if (!DEBUG_MODE) {
+      // Try to check if we have dominant speaker updates already
+      const dominantSpeaker = this.store.getState(selectDominantSpeaker);
+      if (dominantSpeaker) {
+        // Let the dominant speaker detection handle it
+        return;
+      }
+    }
+    
     const peers = this.store.getState(selectPeers);
     
     peers.forEach(peer => {
@@ -839,7 +1392,7 @@ class HMSService {
   }
 
   /**
-   * Setup notification listeners for hand raise events
+   * Setup notification listeners for hand raise events and peer join/leave updates
    */
   setupHandRaiseNotifications() {
     if (DEBUG_MODE && DEBUG_ROOM.enabled) {
@@ -847,47 +1400,67 @@ class HMSService {
       return;
     }
     
-    // Listen for hand raise notifications
+    // Listen for hand raise notifications and peer join/leave events
     this.store.subscribe(notification => {
-      if (notification.type === HMSNotificationTypes.HAND_RAISE_CHANGED) {
-        const peer = notification.data;
-        const isHandRaised = peer.isHandRaised;
-        
-        if (isHandRaised && !peer.isLocal) {
-          // Someone else raised their hand
-          console.log(`${peer.name} raised their hand`);
+      switch (notification.type) {
+        case HMSNotificationTypes.HAND_RAISE_CHANGED:
+          const peer = notification.data;
+          const isHandRaised = peer.isHandRaised;
           
-          // Show notification to everyone
-          showSuccessMessage(`${peer.name} raised their hand`);
-          
-          // Additional notification to room creator
-          if (this.isRoomCreator()) {
-            // Wait a moment to avoid overlapping notifications
-            setTimeout(() => {
-              showSuccessMessage(`${peer.name} would like to speak. You can invite them by clicking on their profile.`);
-            }, 3000);
+          if (isHandRaised && !peer.isLocal) {
+            // Someone else raised their hand
+            console.log(`${peer.name} raised their hand`);
+            
+            // Show notification to everyone
+            showSuccessMessage(`${peer.name} raised their hand`);
+            
+            // Additional notification to room creator
+            if (this.isRoomCreator()) {
+              // Wait a moment to avoid overlapping notifications
+              setTimeout(() => {
+                showSuccessMessage(`${peer.name} would like to speak. You can invite them by clicking on their profile.`);
+              }, 3000);
+            }
+            
+            // Store the raised hand state
+            raisedHandPeers.set(peer.id, true);
+            
+            // Setup auto-lower timer
+            this.setupHandLowerTimer(peer.id);
+          } else if (!isHandRaised && !peer.isLocal) {
+            // Someone else lowered their hand
+            raisedHandPeers.set(peer.id, false);
+            
+            // Clear any existing timer
+            if (handRaiseTimers.has(peer.id)) {
+              clearTimeout(handRaiseTimers.get(peer.id));
+              handRaiseTimers.delete(peer.id);
+            }
           }
           
-          // Store the raised hand state
-          raisedHandPeers.set(peer.id, true);
+          // Trigger a UI update
+          document.dispatchEvent(new CustomEvent('hand-raise-changed', {
+            detail: { peerId: peer.id, isRaised: isHandRaised }
+          }));
+          break;
           
-          // Setup auto-lower timer
-          this.setupHandLowerTimer(peer.id);
-        } else if (!isHandRaised && !peer.isLocal) {
-          // Someone else lowered their hand
-          raisedHandPeers.set(peer.id, false);
+        case HMSNotificationTypes.PEER_LIST:
+          console.log(`${notification.data.length} peers are in the room:`, notification.data.map(p => p.name));
+          break;
           
-          // Clear any existing timer
-          if (handRaiseTimers.has(peer.id)) {
-            clearTimeout(handRaiseTimers.get(peer.id));
-            handRaiseTimers.delete(peer.id);
-          }
-        }
-        
-        // Trigger a UI update
-        document.dispatchEvent(new CustomEvent('hand-raise-changed', {
-          detail: { peerId: peer.id, isRaised: isHandRaised }
-        }));
+        case HMSNotificationTypes.PEER_JOINED:
+          console.log(`${notification.data.name} joined`);
+          document.dispatchEvent(new CustomEvent('peer-joined', {
+            detail: { peer: notification.data }
+          }));
+          break;
+          
+        case HMSNotificationTypes.PEER_LEFT:
+          console.log(`${notification.data.name} left`);
+          document.dispatchEvent(new CustomEvent('peer-left', {
+            detail: { peer: notification.data }
+          }));
+          break;
       }
     }, selectBroadcastMessages);
   }
@@ -1108,15 +1681,17 @@ class HMSService {
   }
 
   /**
-   * Set up message listeners for emoji reactions
+   * Set up message listeners for emoji reactions and chat messages
    */
   setupMessageListeners() {
     // Set up broadcast message listener
     this.store.subscribe((messages) => {
       messages.forEach(message => {
-        // Check if the message is an emoji reaction
+        // Check message type and handle accordingly
         if (message.type === 'EMOJI_REACTION') {
           this.handleEmojiReaction(message.message, message.sender);
+        } else if (message.type === 'CHAT_MESSAGE') {
+          this.handleChatMessage(message.message, message.sender);
         }
       });
     }, selectBroadcastMessages);
@@ -1238,6 +1813,252 @@ class HMSService {
     return {
       timeLeft,
       expiresAt: emojiReactionTimers.get(peerId)
+    };
+  }
+  
+  /**
+   * Handle chat message from a peer
+   * @param {string} message - The chat message
+   * @param {Object} sender - The peer who sent the message
+   */
+  handleChatMessage(message, sender) {
+    try {
+      // Get the local peer ID to check if this is our own message
+      const localPeerId = this.store.getState(selectLocalPeerID);
+      
+      let messageData;
+      
+      // Parse the message if it's a JSON string
+      if (typeof message === 'string' && message.startsWith('{')) {
+        try {
+          messageData = JSON.parse(message);
+          
+          // IMPORTANT: Check if this is our own message using senderId in the message
+          // This is more reliable than checking sender.id which might not always match
+          if (messageData.senderId === localPeerId) {
+            console.log('Ignoring chat message from self (detected by embedded senderId)');
+            return;
+          }
+        } catch (e) {
+          console.warn('Failed to parse chat message JSON:', e);
+          messageData = { text: message };
+        }
+      } else {
+        messageData = { text: message };
+      }
+      
+      // Also use the traditional sender check as a fallback
+      if (sender && sender.id === localPeerId) {
+        console.log('Ignoring chat message from self (detected by sender.id)');
+        return;
+      }
+      
+      // Try to get a more descriptive sender name
+      let senderName = sender?.name || 'Unknown User';
+      
+      // Check if senderName is provided directly in the message data (our enhanced format)
+      if (messageData.senderName) {
+        senderName = messageData.senderName;
+      } else if (sender && sender.metadata) {
+        // Try to extract name from peer metadata
+        try {
+          const metadata = typeof sender.metadata === 'string' ? 
+            JSON.parse(sender.metadata) : sender.metadata;
+          
+          // Prefer username over displayName when available
+          if (metadata.profile && metadata.profile.username) {
+            senderName = metadata.profile.username;
+          } else if (metadata.profile && metadata.profile.displayName) {
+            senderName = metadata.profile.displayName;
+          }
+        } catch (e) {
+          console.warn('Error extracting sender name from metadata:', e);
+        }
+      }
+      
+      console.log('Chat message received:', { message: messageData.text, sender: senderName });
+      
+      // Create event for chat message display
+      const event = new CustomEvent('chat-message', {
+        detail: {
+          messageData,
+          senderId: messageData.senderId || sender?.id, // Prefer the embedded senderId if available
+          senderName: senderName,
+          timestamp: messageData.timestamp || new Date().toISOString()
+        }
+      });
+      
+      // Dispatch event for UI components to handle
+      document.dispatchEvent(event);
+      
+      // Handle debug mode separately
+      if (DEBUG_MODE && isDebugRoomActive) {
+        console.log(`[DEBUG] Chat message received: "${messageData.text}" from ${senderName}`);
+      }
+    } catch (error) {
+      console.error('Error handling chat message:', error);
+    }
+  }
+  
+  /**
+   * Send chat message
+   * @param {string} text - The text message to send
+   * @param {Object} [metadata] - Optional metadata to include with the message
+   * @returns {Promise<boolean|object>} Success indicator or error with timeout info
+   */
+  async sendChatMessage(text, metadata = {}) {
+    try {
+      if (!text || text.trim() === '') {
+        return {
+          success: false,
+          error: 'empty_message',
+          message: 'Cannot send empty message'
+        };
+      }
+      
+      // Get local peer ID
+      const localPeerId = this.store.getState(selectLocalPeerID) || 
+                         (DEBUG_MODE && isDebugRoomActive ? 
+                           debugMockPeers.find(peer => peer.isLocal)?.id : null);
+      
+      // Check if user is in timeout
+      if (localPeerId && chatMessageTimers.has(localPeerId)) {
+        const timeLeft = Math.ceil((chatMessageTimers.get(localPeerId) - Date.now()) / 1000);
+        return { 
+          success: false, 
+          error: 'rate_limited',
+          timeLeft: timeLeft > 0 ? timeLeft : 2, // Failsafe if timer calculation is off
+          message: `Please wait ${timeLeft} second${timeLeft !== 1 ? 's' : ''} before sending another message`
+        };
+      }
+      
+      // Get local peer for adding sender info
+      const localPeer = this.getLocalPeer();
+      if (!localPeer) {
+        return {
+          success: false,
+          error: 'not_connected',
+          message: 'Not connected to a room'
+        };
+      }
+      
+      // Get the local peer's proper name
+      let senderName = localPeer.name;
+      try {
+        if (localPeer.metadata) {
+          const metadata = typeof localPeer.metadata === 'string' ? 
+            JSON.parse(localPeer.metadata) : localPeer.metadata;
+          
+          // Prefer username over displayName when available
+          if (metadata.profile && metadata.profile.username) {
+            senderName = metadata.profile.username;
+          } else if (metadata.profile && metadata.profile.displayName) {
+            senderName = metadata.profile.displayName;
+          }
+        }
+      } catch (e) {
+        console.warn('Error extracting sender name from metadata:', e);
+      }
+      
+      // Create message data object with text and metadata
+      const messageData = {
+        text: text.trim(),
+        ...metadata,
+        senderName: senderName, // Include sender name directly in message data
+        timestamp: new Date().toISOString(),
+        senderId: localPeerId // Include the sender's ID for later filtering
+      };
+      
+      // Handle debug mode
+      if (DEBUG_MODE && isDebugRoomActive) {
+        console.log('[DEBUG] Sending chat message:', messageData);
+        
+        // Set rate limiting timeout
+        if (localPeer?.id) {
+          chatMessageTimers.set(localPeer.id, Date.now() + CHAT_MESSAGE_TIMEOUT);
+          
+          // Clear timeout after duration
+          setTimeout(() => {
+            chatMessageTimers.delete(localPeer.id);
+            // Dispatch event to notify UI that cooldown is complete
+            document.dispatchEvent(new CustomEvent('chat-cooldown-complete', {
+              detail: { peerId: localPeer.id }
+            }));
+          }, CHAT_MESSAGE_TIMEOUT);
+        }
+        
+        // For debug mode, we create our own event
+        // Create event for chat message display
+        const event = new CustomEvent('chat-message', {
+          detail: {
+            messageData,
+            senderId: localPeer.id,
+            senderName: senderName,
+            timestamp: messageData.timestamp
+          }
+        });
+        document.dispatchEvent(event);
+        
+        return { success: true };
+      }
+      
+      // Set rate limiting timeout for production mode
+      if (localPeerId) {
+        chatMessageTimers.set(localPeerId, Date.now() + CHAT_MESSAGE_TIMEOUT);
+        
+        // Clear timeout after duration
+        setTimeout(() => {
+          chatMessageTimers.delete(localPeerId);
+          // Dispatch event to notify UI that cooldown is complete
+          document.dispatchEvent(new CustomEvent('chat-cooldown-complete', {
+            detail: { peerId: localPeerId }
+          }));
+        }, CHAT_MESSAGE_TIMEOUT);
+      }
+      
+      console.log('Sending broadcast message with HMS SDK:', messageData);
+      
+      // First, directly show the message in the UI for immediate feedback
+      // Create event for chat message display
+      const event = new CustomEvent('chat-message', {
+        detail: {
+          messageData,
+          senderId: localPeer.id,
+          senderName: senderName,
+          timestamp: messageData.timestamp
+        }
+      });
+      document.dispatchEvent(event);
+      
+      // Then send through HMS (we'll ignore the echo when it comes back)
+      await this.actions.sendBroadcastMessage(JSON.stringify(messageData), 'CHAT_MESSAGE');
+      
+      return { success: true };
+    } catch (error) {
+      console.error('Error sending chat message:', error);
+      return { success: false, error: 'sending_failed', message: error.message };
+    }
+  }
+  
+  /**
+   * Check if user is in chat message timeout
+   * @param {string} peerId - ID of peer to check
+   * @returns {object|null} Timeout info or null if not in timeout
+   */
+  getChatMessageTimeoutInfo(peerId) {
+    if (!peerId || !chatMessageTimers.has(peerId)) {
+      return null;
+    }
+    
+    const timeLeft = Math.ceil((chatMessageTimers.get(peerId) - Date.now()) / 1000);
+    if (timeLeft <= 0) {
+      chatMessageTimers.delete(peerId);
+      return null;
+    }
+    
+    return {
+      timeLeft,
+      expiresAt: chatMessageTimers.get(peerId)
     };
   }
 
